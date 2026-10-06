@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 7%;
+    --foreground: 45 20% 95%;
+    --card: 0 0% 11%;
+    --card-foreground: 45 20% 95%;
+    --popover: 0 0% 11%;
+    --popover-foreground: 45 20% 95%;
+    --primary: 42 72% 52%;
+    --primary-foreground: 0 0% 6%;
+    --secondary: 0 0% 15%;
+    --secondary-foreground: 45 20% 90%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 42 85% 60%;
+    --accent-foreground: 0 0% 6%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 18%;
+    --input: 0 0% 15%;
+    --ring: 42 72% 52%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+}
+
+@layer utilities {
+  .app-container {
+    max-width: 480px;
+    margin: 0 auto;
+    min-height: 100vh;
+    background-color: #111111;
+  }
+
+  .gold-gradient {
+    background: linear-gradient(135deg, #b8860b 0%, #daa520 40%, #c9a84c 70%, #f0c040 100%);
+  }
+
+  .gold-gradient-text {
+    background: linear-gradient(135deg, #c9a84c, #f0c040, #c9a84c);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .dark-card {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+  }
+
+  .dark-card-elevated {
+    background: #1e1e1e;
+    border: 1px solid #333333;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  }
+
+  .gold-border {
+    border: 1px solid rgba(201, 168, 76, 0.3);
+  }
+
+  .text-gold {
+    color: #c9a84c;
+  }
+
+  .text-gold-bright {
+    color: #f0c040;
+  }
+
+  .bg-dark {
+    background-color: #111111;
+  }
+
+  .bg-dark-card {
+    background-color: #1a1a1a;
+  }
+
+  .bg-dark-elevated {
+    background-color: #222222;
+  }
+}
