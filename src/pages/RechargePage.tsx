@@ -1,24 +1,25 @@
 import { useState } from "react"
 import { createClient } from '@supabase/supabase-js'
-import { toast } from 'sonner'
+import { useNavigate } from 'react-router-dom'
 
 const MIN = 30000
+const API_BASE = "https://YOUR-BACKEND.vercel.app" // <- CHANGE TO YOUR REAL BACKEND URL
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL as string,
-  import.meta.env.VITE_SUPABASE_ANON_KEY as string
-)
+// Safe Supabase - won't crash if env missing
+const url = import.meta.env.VITE_SUPABASE_URL
+const key = import.meta.env.VITE_SUPABASE_ANON_KEY
+const supabase = url && key ? createClient(url, key) : null as any
 
 export default function Recharge(){
  const [amount,setAmount]=useState("")
  const [phone,setPhone]=useState("")
  const [loading,setLoading]=useState(false)
  const [polling, setPolling] = useState(false)
+ const navigate = useNavigate()
  const quick = [30000, 50000, 100000, 200000]
 
  const startAutoPolling = (reference: string, numAmount: number) => {
    setPolling(true)
-   toast.success("Pending... Enter PIN on phone!")
    let attempts = 0
    const interval = setInterval(async () => {
      attempts++
@@ -26,10 +27,11 @@ export default function Recharge(){
        clearInterval(interval)
        setPolling(false)
        setLoading(false)
-       alert("Still pending. If you paid, it will auto-credit shortly. Check Recharge History.")
-       window.location.href = "/recharge-history"
+       alert("Still pending. If you paid, it will auto-credit shortly.")
+       navigate("/recharge-status")
        return
      }
+     if(!supabase) return
      const { data } = await supabase.from('recharges').select('status').eq('reference', reference).single()
      if(data?.status === 'completed') {
        clearInterval(interval)
@@ -48,10 +50,10 @@ export default function Recharge(){
          }
          setPolling(false)
          setLoading(false)
-         toast.success(`✅ ${numAmount.toLocaleString()} UGX credited!`)
-         setTimeout(() => window.location.href = "/", 1500)
+         alert(`✅ ${numAmount.toLocaleString()} UGX credited!`)
+         navigate("/")
        } catch(e) {
-         window.location.href = "/"
+         navigate("/")
        }
      }
    }, 3000)
@@ -59,14 +61,8 @@ export default function Recharge(){
 
  const handleRecharge = async () => {
   const num = Number(amount);
-  if (!num || num < MIN) {
-    alert("Minimum is UGX 30,000");
-    return;
-  }
-  if (!phone.trim()) {
-    alert("Enter phone number");
-    return;
-  }
+  if (!num || num < MIN) { alert("Minimum is UGX 30,000"); return; }
+  if (!phone.trim()) { alert("Enter phone number"); return; }
   setLoading(true);
   try {
     const cleanPhone = phone.trim();
@@ -74,7 +70,7 @@ export default function Recharge(){
     const withoutZero = raw.startsWith('0')? raw.slice(1) : raw;
     const autoProvider = (withoutZero.startsWith('75') || withoutZero.startsWith('70') || withoutZero.startsWith('74'))? 'airtel' : 'mtn';
 
-    const res = await fetch("/api/payments/create", {
+    const res = await fetch(`${API_BASE}/api/payments/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ amount: num, phone: cleanPhone, userId: cleanPhone, provider: autoProvider })
@@ -84,18 +80,10 @@ export default function Recharge(){
     let data: any
     try { data = JSON.parse(text) } catch { throw new Error(text.slice(0,300) || "Empty response") }
 
-    if(!res.ok) {
-      const realError = data?.pesajet_data?.message || data?.pesajet_data?.error || data?.raw || JSON.stringify(data).slice(0,400)
-      throw new Error(realError || "Payment failed")
-    }
+    if(!res.ok) throw new Error(data?.pesajet_data?.message || data?.raw || "Payment failed")
 
-    const reference = data.reference
-    if(reference) {
-      startAutoPolling(reference, num)
-    } else {
-      alert(`STK sent to ${phone}!`)
-      window.location.href = "/recharge-history"
-    }
+    if(data.reference) startAutoPolling(data.reference, num)
+    else { alert(`STK sent to ${phone}!`); navigate("/recharge-status") }
   } catch (e: any) {
     alert("Error: " + e.message)
     setLoading(false)
@@ -109,11 +97,7 @@ export default function Recharge(){
       <h1 className="font-bold text-[18px] text-[#f8e7a0]">Recharge Account</h1>
       <p className="text-[12px] text-gray-400">{polling? "Waiting for PIN..." : "Enter details"}</p>
     </div>
-    {polling && (
-      <div className="bg-[#f8e7a0]/10 border border-[#f8e7a0] rounded-[20px] p-5 mt-4 text-center animate-pulse">
-        <p className="text-[#f8e7a0] font-bold">⏳ Pending - Check phone for PIN</p>
-      </div>
-    )}
+    {/* ... rest of your JSX same ... */}
     <div className="bg-[#1a1a1a] border border-[#f8e7a0] rounded-[20px] p-5 mt-4">
       <label className="text-[13px] font-bold text-[#f8e7a0]">Recharge Amount</label>
       <div className="flex mt-2 bg-[#0e0e0e] rounded-xl border border-[#3a3210] px-3 items-center">
