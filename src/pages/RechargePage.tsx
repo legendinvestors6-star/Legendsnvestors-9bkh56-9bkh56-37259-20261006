@@ -3,14 +3,15 @@ import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
 
 const MIN = 30000
+// YOUR REAL LIVE BACKEND - hyper-service that gave 201 SUCCESS
 const API_BASE = "https://ssuzpvmseozafgweykkg.supabase.co/functions/v1/hyper-service"
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY
-const supabase = url && key ? createClient(url, key) : null
+const supabase = url && key ? createClient(url, key) : null as any
 
 export default function Recharge(){
- const [amount,setAmount]=useState("30000")
+ const [amount,setAmount]=useState("")
  const [phone,setPhone]=useState("")
  const [loading,setLoading]=useState(false)
  const [polling, setPolling] = useState(false)
@@ -34,18 +35,26 @@ export default function Recharge(){
      const { data } = await supabase.from('recharges').select('status').eq('reference', reference).single()
      if(data?.status === 'completed') {
        clearInterval(interval)
-       const users = JSON.parse(localStorage.getItem('users') || '[]')
-       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}')
-       const idx = users.findIndex((u) => u.id === currentUser.id || u.phone === currentUser.phone)
-       if(idx!== -1) {
-         users[idx].balance = (users[idx].balance || 0) + numAmount
-         localStorage.setItem('users', JSON.stringify(users))
-         localStorage.setItem('currentUser', JSON.stringify({...currentUser, balance: users[idx].balance}))
+       try {
+         const users = JSON.parse(localStorage.getItem('users') || '[]')
+         const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}')
+         const idx = users.findIndex((u) => u.id === currentUser.id || u.phone === currentUser.phone)
+         if(idx!== -1) {
+           users[idx].balance = (users[idx].balance || 0) + numAmount
+           localStorage.setItem('users', JSON.stringify(users))
+           const updatedCurrent = {...currentUser, balance: users[idx].balance}
+           localStorage.setItem('currentUser', JSON.stringify(updatedCurrent))
+         } else {
+           currentUser.balance = (currentUser.balance || 0) + numAmount
+           localStorage.setItem('currentUser', JSON.stringify(currentUser))
+         }
+         setPolling(false)
+         setLoading(false)
+         alert(`✅ ${numAmount.toLocaleString()} UGX credited!`)
+         navigate("/")
+       } catch(e) {
+         navigate("/")
        }
-       setPolling(false)
-       setLoading(false)
-       alert(`✅ ${numAmount.toLocaleString()} UGX credited!`)
-       navigate("/")
      }
    }, 3000)
  }
@@ -61,6 +70,7 @@ export default function Recharge(){
     const withoutZero = raw.startsWith('0')? raw.slice(1) : raw;
     const autoProvider = (withoutZero.startsWith('75') || withoutZero.startsWith('70') || withoutZero.startsWith('74'))? 'airtel' : 'mtn';
 
+    // FIXED FETCH - Direct to hyper-service, no /api/payments/create
     const res = await fetch(API_BASE, {
       method: "POST",
       headers: { 
@@ -75,21 +85,24 @@ export default function Recharge(){
     let data
     try { data = JSON.parse(text) } catch { throw new Error(text.slice(0,300) || "Empty response") }
 
-    if(!res.ok) throw new Error(data?.error || data?.details || data?.data?.message || "Payment failed")
+    if(!res.ok) throw new Error(data?.error || data?.data?.message || "Payment failed")
 
+    // Save pending recharge so webhook can find it
     const reference = data.data?.reference || data.reference || data.data?.id
     if(supabase && reference) {
-      await supabase.from('recharges').insert({ reference, amount: num, phone: cleanPhone, status: 'pending', provider: autoProvider })
+      await supabase.from('recharges').insert({
+        reference: reference,
+        amount: num,
+        phone: cleanPhone,
+        status: 'pending',
+        provider: autoProvider
+      })
     }
+
     if(reference) startAutoPolling(reference, num)
     else { alert(`STK sent to ${phone}!`); navigate("/recharge-status") }
-
   } catch (e) {
-    if (e.message.includes("Name or service not known") || e.message.includes("503") || e.message.includes("PesaJet network")) {
-      alert("Network busy - PesaJet is reconnecting. Please wait 30 seconds and try again.")
-    } else {
-      alert("Error: " + e.message)
-    }
+    alert("Error: " + e.message)
     setLoading(false)
   }
  }
@@ -117,7 +130,7 @@ export default function Recharge(){
       <label className="text-[13px] font-bold text-[#f8e7a0]">Phone Number</label>
       <div className="flex mt-2 bg-[#0e0e0e] rounded-xl border border-[#3a3210] px-3 items-center">
         <span className="text-gray-400">📱</span>
-        <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Enter phone number e.g. 0756..." type="tel" className="flex-1 bg-transparent p-3 text-[15px] text-white outline-none" />
+        <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Enter phone number" type="tel" className="flex-1 bg-transparent p-3 text-[15px] text-white outline-none" />
       </div>
       <button onClick={handleRecharge} disabled={loading || polling || Number(amount) < MIN} className="w-full mt-5 bg-gradient-to-b from-[#f8e7a0] to-[#d4af37] disabled:from-gray-600 text-black py-4 rounded-xl font-extrabold text-[16px]">
         {polling? "⏳ Waiting for PIN..." : loading? "Processing..." : "Proceed to Recharge"}
@@ -126,4 +139,4 @@ export default function Recharge(){
    </div>
   </div>
  )
-         }
+}
