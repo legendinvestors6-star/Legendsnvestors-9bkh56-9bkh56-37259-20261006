@@ -3,9 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 import { useNavigate } from 'react-router-dom'
 
 const MIN = 30000
-const API_BASE = "https://YOUR-BACKEND.vercel.app" // <- CHANGE TO YOUR REAL BACKEND URL
+// YOUR REAL LIVE BACKEND - hyper-service that gave 201 SUCCESS
+const API_BASE = "https://ssuzpvmseozafgweykkg.supabase.co/functions/v1/hyper-service"
 
-// Safe Supabase - won't crash if env missing
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY
 const supabase = url && key ? createClient(url, key) : null as any
@@ -18,7 +18,7 @@ export default function Recharge(){
  const navigate = useNavigate()
  const quick = [30000, 50000, 100000, 200000]
 
- const startAutoPolling = (reference: string, numAmount: number) => {
+ const startAutoPolling = (reference, numAmount) => {
    setPolling(true)
    let attempts = 0
    const interval = setInterval(async () => {
@@ -38,7 +38,7 @@ export default function Recharge(){
        try {
          const users = JSON.parse(localStorage.getItem('users') || '[]')
          const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}')
-         const idx = users.findIndex((u:any) => u.id === currentUser.id || u.phone === currentUser.phone)
+         const idx = users.findIndex((u) => u.id === currentUser.id || u.phone === currentUser.phone)
          if(idx!== -1) {
            users[idx].balance = (users[idx].balance || 0) + numAmount
            localStorage.setItem('users', JSON.stringify(users))
@@ -70,21 +70,38 @@ export default function Recharge(){
     const withoutZero = raw.startsWith('0')? raw.slice(1) : raw;
     const autoProvider = (withoutZero.startsWith('75') || withoutZero.startsWith('70') || withoutZero.startsWith('74'))? 'airtel' : 'mtn';
 
-    const res = await fetch(`${API_BASE}/api/payments/create`, {
+    // FIXED FETCH - Direct to hyper-service, no /api/payments/create
+    const res = await fetch(API_BASE, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: num, phone: cleanPhone, userId: cleanPhone, provider: autoProvider })
+      headers: { 
+        "Content-Type": "application/json",
+        "apikey": key,
+        "Authorization": `Bearer ${key}`
+      },
+      body: JSON.stringify({ amount: num, phone: cleanPhone, provider: autoProvider })
     });
 
     const text = await res.text()
-    let data: any
+    let data
     try { data = JSON.parse(text) } catch { throw new Error(text.slice(0,300) || "Empty response") }
 
-    if(!res.ok) throw new Error(data?.pesajet_data?.message || data?.raw || "Payment failed")
+    if(!res.ok) throw new Error(data?.error || data?.data?.message || "Payment failed")
 
-    if(data.reference) startAutoPolling(data.reference, num)
+    // Save pending recharge so webhook can find it
+    const reference = data.data?.reference || data.reference || data.data?.id
+    if(supabase && reference) {
+      await supabase.from('recharges').insert({
+        reference: reference,
+        amount: num,
+        phone: cleanPhone,
+        status: 'pending',
+        provider: autoProvider
+      })
+    }
+
+    if(reference) startAutoPolling(reference, num)
     else { alert(`STK sent to ${phone}!`); navigate("/recharge-status") }
-  } catch (e: any) {
+  } catch (e) {
     alert("Error: " + e.message)
     setLoading(false)
   }
@@ -97,7 +114,6 @@ export default function Recharge(){
       <h1 className="font-bold text-[18px] text-[#f8e7a0]">Recharge Account</h1>
       <p className="text-[12px] text-gray-400">{polling? "Waiting for PIN..." : "Enter details"}</p>
     </div>
-    {/* ... rest of your JSX same ... */}
     <div className="bg-[#1a1a1a] border border-[#f8e7a0] rounded-[20px] p-5 mt-4">
       <label className="text-[13px] font-bold text-[#f8e7a0]">Recharge Amount</label>
       <div className="flex mt-2 bg-[#0e0e0e] rounded-xl border border-[#3a3210] px-3 items-center">
@@ -123,4 +139,4 @@ export default function Recharge(){
    </div>
   </div>
  )
-  }
+}
