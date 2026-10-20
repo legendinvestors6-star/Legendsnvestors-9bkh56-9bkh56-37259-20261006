@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 
 const SUPABASE_URL = "https://ssuzpvmseozafgweykkg.supabase.co"
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzdXpwdm1zZW96YWZnd2V5a2tnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIyNTM0NjMsImV4cCI6MjEwNzgyOTQ2M30.HH4gTqBpvYQ-HFwHfvQZ3GQWr_zy58fXoinctG7LmUU"
-const API_BASE = `${SUPABASE_URL}/functions/v1/hyper-service`
+const API_BASE = "https://pesajet.legendinvestors6.workers.dev" 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 export default function Recharge(){
