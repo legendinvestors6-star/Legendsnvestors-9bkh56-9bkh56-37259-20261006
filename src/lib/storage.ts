@@ -131,11 +131,17 @@ export function registerUser(phone: string, password: string, referralCode?: str
   return { success: true, message: 'Registration successful', user: newUser };
 }
 
-export function loginUser(phone: string, password: string): { success: boolean; message: string; user?: User } {
+export function loginUser(identifier: string, password: string): { success: boolean; message: string; user?: User } {
   initAdmin();
   const users = getUsers();
-  const user = users.find(u => u.phone === phone && u.password === password);
-  if (!user) return { success: false, message: 'Incorrect phone number or password' };
+  const id = identifier.trim().toLowerCase();
+  const user = users.find(u => {
+    const phoneMatch = u.phone === identifier.trim() || u.phone.toLowerCase() === id;
+    const nameMatch = (u as any).name?.toLowerCase() === id || (u as any).username?.toLowerCase() === id || (u as any).fullName?.toLowerCase() === id;
+    return phoneMatch || nameMatch;
+  });
+  if (!user) return { success: false, message: 'Incorrect phone/name or password' };
+  if (user.password !== password) return { success: false, message: 'Incorrect password' };
   setCurrentUser(user as any);
   return { success: true, message: 'Login successful', user };
 }
@@ -308,10 +314,6 @@ export function approvePasswordReset(id: string): boolean {
   if (uidx !== -1) {
     users[uidx].password = req.newPassword;
     saveUsers(users);
-    const supaRaw = localStorage.getItem('legend_user');
-    if (supaRaw) {
-      try { const su = JSON.parse(supaRaw); if (su.phone === req.phone) { su.password = req.newPassword; localStorage.setItem('legend_user', JSON.stringify(su)); } } catch {}
-    }
   }
   return true;
 }
@@ -343,4 +345,38 @@ export function getTeamCommissions(userId: string) {
   const c2 = sum(level2) * (LEVEL2_RATE || 0.02);
   const c3 = sum(level3) * (LEVEL3_RATE || 0.01);
   return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) };
-  }
+}
+
+// --- FIXES FOR BUILD ERRORS ---
+export function createPasswordReset(phone: string, newPassword: string) {
+  const users = getUsers();
+  if (!users.find(u => u.phone === phone)) return { success: false, message: 'Phone not registered' };
+  createPasswordResetRequest(phone, newPassword);
+  return { success: true, message: 'Request submitted' };
+}
+
+export function getPasswordResetStatus(phone: string) {
+  const all = getPasswordResets();
+  const found = all.filter(r => r.phone === phone).sort((a,b)=> new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  return found || null;
+}
+
+export function redeemGiftCode(userId: string, code: string): { success: boolean; message: string; amount?: number } {
+  const codes = getGiftCodes();
+  const idx = codes.findIndex(c => c.code.toUpperCase() === code.trim().toUpperCase());
+  if (idx === -1) return { success: false, message: 'Invalid gift code' };
+  const gift = codes[idx];
+  if (gift.usedBy) return { success: false, message: 'Gift code already used' };
+  if (gift.expiresAt && new Date(gift.expiresAt).getTime() < Date.now()) return { success: false, message: 'Gift code expired' };
+  gift.usedBy = userId;
+  gift.usedAt = new Date().toISOString();
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes));
+  const user = getUsers().find(u => u.id === userId);
+  if (!user) return { success: false, message: 'User not found' };
+  updateUser(userId, { balance: (user.balance || 0) + gift.amount, cumulativeIncome: (user.cumulativeIncome || 0) + gift.amount } as any);
+  addTransaction({ userId, type: 'gift', amount: gift.amount, status: 'completed', description: `Redeemed gift code ${gift.code}` } as any);
+  return { success: true, message: `Successfully redeemed ${formatUGX(gift.amount)}`, amount: gift.amount };
+}
+
+export const redeemGift = redeemGiftCode;
+export const redeemCode = redeemGiftCode;
