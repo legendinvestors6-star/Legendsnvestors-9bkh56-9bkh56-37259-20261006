@@ -19,13 +19,8 @@ import BindCardPage from "./pages/BindCardPage";
 import RecordsPage from "./pages/RecordsPage";
 import AboutPage from "./pages/AboutPage";
 import RegulationPage from "./pages/RegulationPage";
-import CustomerServicePage from "./pages/CustomerServicePage";
-import RedeemGiftPage from "./pages/RedeemGiftPage";
 import AdminPage from "./pages/AdminPage";
-import InvitePage from "./pages/InvitePage";
-import WithdrawStatusPage from "./pages/WithdrawStatusPage";
-import RechargeStatusPage from "./pages/RechargeStatusPage";
-import ProfilePage from "./pages/ProfilePage";
+import RedeemGiftPage from "./pages/RedeemGiftPage";
 
 const queryClient = new QueryClient();
 
@@ -51,13 +46,8 @@ const App = () => (
           <Route path="/records" element={<RecordsPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/regulation" element={<RegulationPage />} />
-          <Route path="/customer-service" element={<CustomerServicePage />} />
           <Route path="/redeem" element={<RedeemGiftPage />} />
           <Route path="/admin" element={<AdminPage />} />
-          <Route path="/invite" element={<InvitePage />} />
-          <Route path="/withdraw-status" element={<WithdrawStatusPage />} />
-          <Route path="/recharge-status" element={<RechargeStatusPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </HashRouter>
