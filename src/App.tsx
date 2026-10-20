@@ -21,14 +21,11 @@ import AboutPage from "./pages/AboutPage";
 import RegulationPage from "./pages/RegulationPage";
 import AdminPage from "./pages/AdminPage";
 import RedeemGiftPage from "./pages/RedeemGiftPage";
-
 const queryClient = new QueryClient();
-
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <Toaster />
-      <Sonner />
+      <Toaster /><Sonner />
       <HashRouter>
         <Routes>
           <Route path="/" element={<Index />} />
@@ -54,5 +51,4 @@ const App = () => (
     </TooltipProvider>
   </QueryClientProvider>
 );
-
 export default App;
