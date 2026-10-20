@@ -1,204 +1,371 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { Eye, EyeOff, Phone, Lock, ArrowLeft, CheckCircle, Clock, XCircle, RefreshCw, User } from 'lucide-react';
-import { toast } from 'sonner';
-import { loginUser, createPasswordReset, getPasswordResetStatus } from '@/lib/storage';
+import type { User, Transaction, RechargeOrder, WithdrawOrder, UserProduct } from '@/types';
+import { REGISTRATION_BONUS, PRODUCTS, MTN_ACCOUNT, MTN_NAME, LEVEL1_RATE, LEVEL2_RATE, LEVEL3_RATE, CHECKIN_REWARD } from '@/constants/products';
+import { createClient } from '@supabase/supabase-js';
 
-type View = 'login' | 'forgot' | 'status';
+// Supabase for cloud
+export const supabase = createClient(
+  (import.meta as any).env?.VITE_SUPABASE_URL || '',
+  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
+);
 
-export default function LoginPage() {
-  const navigate = useNavigate();
-  const [view, setView] = useState<View>('login');
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [resetPhone, setResetPhone] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [confirmPw, setConfirmPw] = useState('');
-  const [showNewPw, setShowNewPw] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [statusPhone, setStatusPhone] = useState('');
-  const [statusResult, setStatusResult] = useState<ReturnType<typeof getPasswordResetStatus>>(null);
-  const [checkingStatus, setCheckingStatus] = useState(false);
+const KEYS = {
+  USERS: 'legend_users',
+  CURRENT_USER: 'legend_current_user',
+  TRANSACTIONS: 'legend_transactions',
+  RECHARGE_ORDERS: 'legend_recharge_orders',
+  WITHDRAW_ORDERS: 'legend_withdraw_orders',
+  USER_PRODUCTS: 'legend_user_products',
+  GIFT_CODES: 'legend_gift_codes',
+  PASSWORD_RESETS: 'legend_password_resets',
+  LAST_DAILY_CREDIT: 'legend_last_daily_credit',
+};
 
-  const handleLogin = () => {
-    if (!identifier.trim() || !password.trim()) { toast.error('Please fill in all fields'); return; }
-    setLoading(true);
-    setTimeout(() => {
-      const result = loginUser(identifier.trim(), password);
-      if (result.success && result.user) {
-        toast.success('Login successful!');
-        navigate(result.user.isAdmin ? '/admin' : '/home');
-      } else {
-        toast.error(result.message);
+export interface PasswordResetRequest { id: string; phone: string; newPassword: string; status: 'pending' | 'approved' | 'rejected'; createdAt: string; resolvedAt?: string; note?: string; }
+export interface GiftCode { id: string; code: string; amount: number; usedBy?: string; usedAt?: string; createdAt: string; note?: string; expiresAt?: string; }
+
+function generateId(): string { return Math.random().toString(36).slice(2, 11) + Date.now().toString(36); }
+function generateReferralCode(): string { return Math.random().toString(36).slice(2, 10).toUpperCase(); }
+
+const ADMIN_PHONE = '0746085840';
+const ADMIN_PASSWORD = 'milly@2323';
+
+function safeParse<T>(s: string | null, fallback: T): T {
+  try { return s ? JSON.parse(s) as T : fallback; } catch { return fallback; }
+}
+
+function initAdmin() {
+  const users = getUsers();
+  const adminIdx = users.findIndex((u: any) => u?.isAdmin);
+  if (adminIdx === -1) {
+    const admin: User = { id: 'admin001', phone: ADMIN_PHONE, password: ADMIN_PASSWORD, balance: 0, cumulativeIncome: 0, level: 1, referralCode: 'ADMIN000', checkInDays: 0, createdAt: new Date().toISOString(), isAdmin: true } as any;
+    saveUsers([...users, admin]);
+  }
+}
+
+export function getUsers(): User[] {
+  return safeParse<User[]>(localStorage.getItem(KEYS.USERS), []);
+}
+export function saveUsers(users: User[]): void {
+  localStorage.setItem(KEYS.USERS, JSON.stringify(users));
+}
+
+export function getCurrentUser(): User | null {
+  try {
+    const supaRaw = localStorage.getItem('legend_user');
+    if (supaRaw) {
+      const u: any = JSON.parse(supaRaw);
+      if (!u || !u.id) return null;
+      return {
+        id: u.id,
+        phone: u.phone,
+        password: u.password || '',
+        balance: Number(u.balance || 0),
+        cumulativeIncome: Number(u.cumulativeIncome || 0) || 0,
+        level: u.level || 1,
+        referralCode: u.referral_code || u.referralCode || '',
+        referredBy: u.referred_by || u.referredBy || undefined,
+        checkInDays: u.checkInDays || 0,
+        lastCheckIn: u.lastCheckIn || undefined,
+        createdAt: u.created_at || new Date().toISOString(),
+        isAdmin: u.phone === ADMIN_PHONE || u.is_admin || u.isAdmin || false,
+        bankCard: u.bankCard || null,
+      } as User;
+    }
+    const id = localStorage.getItem(KEYS.CURRENT_USER);
+    if (!id) return null;
+    return getUsers().find(u => u.id === id) || null;
+  } catch { return null; }
+}
+
+export function setCurrentUser(user: any): void {
+  if (!user) {
+    localStorage.removeItem('legend_user');
+    localStorage.removeItem(KEYS.CURRENT_USER);
+  } else if (typeof user === 'string') {
+    localStorage.setItem(KEYS.CURRENT_USER, user);
+  } else {
+    localStorage.setItem('legend_user', JSON.stringify(user));
+    if (user.id) localStorage.setItem(KEYS.CURRENT_USER, user.id);
+  }
+}
+
+export function updateUser(userId: string, updates: Partial<User>): User | null {
+  try {
+    const raw = localStorage.getItem('legend_user');
+    if (raw) {
+      const u = JSON.parse(raw) as any;
+      if (u.id === userId) {
+        const updated = { ...u, ...updates, balance: (updates as any).balance ?? u.balance } as any;
+        if ((updates as any).referralCode) updated.referral_code = (updates as any).referralCode;
+        if ((updates as any).lastCheckIn) updated.lastCheckIn = (updates as any).lastCheckIn;
+        if ((updates as any).checkInDays !== undefined) updated.checkInDays = (updates as any).checkInDays;
+        if ((updates as any).cumulativeIncome !== undefined) updated.cumulativeIncome = (updates as any).cumulativeIncome;
+        localStorage.setItem('legend_user', JSON.stringify(updated));
       }
-      setLoading(false);
-    }, 500);
-  };
+    }
+  } catch {}
+  const users = getUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) return null;
+  users[idx] = { ...users[idx], ...updates };
+  saveUsers(users);
+  return users[idx];
+}
 
-  const handleForgotSubmit = () => {
-    if (!resetPhone.trim()) { toast.error('Enter your registered phone number'); return; }
-    if (!newPw || newPw.length < 6) { toast.error('New password must be at least 6 characters'); return; }
-    if (newPw !== confirmPw) { toast.error('Passwords do not match'); return; }
-    setSubmitting(true);
-    setTimeout(() => {
-      const result = createPasswordReset(resetPhone.trim(), newPw);
-      if (result.success) {
-        toast.success('Reset request submitted!');
-        setStatusPhone(resetPhone.trim());
-        setStatusResult(getPasswordResetStatus(resetPhone.trim()));
-        setView('status');
-      } else {
-        toast.error(result.message);
-      }
-      setSubmitting(false);
-    }, 600);
-  };
+export function formatUGX(amount: number): string {
+  try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; }
+}
 
-  const handleCheckStatus = () => {
-    if (!statusPhone.trim()) { toast.error('Enter your phone number'); return; }
-    setCheckingStatus(true);
-    setTimeout(() => {
-      const result = getPasswordResetStatus(statusPhone.trim());
-      setStatusResult(result);
-      if (!result) toast.error('No reset request found for this phone number');
-      setCheckingStatus(false);
-    }, 500);
-  };
+export function registerUser(phone: string, password: string, referralCode?: string): { success: boolean; message: string; user?: User } {
+  initAdmin();
+  const users = getUsers();
+  if (users.find(u => u.phone === phone)) return { success: false, message: 'Phone number already registered' };
+  let referredBy: string | undefined;
+  if (referralCode) {
+    const referrer = users.find(u => u.referralCode === referralCode.toUpperCase());
+    if (referrer) referredBy = referrer.id;
+  }
+  const newUser: User = { id: generateId(), phone, password, balance: REGISTRATION_BONUS || 0, cumulativeIncome: 0, level: 1, referralCode: generateReferralCode(), referredBy, checkInDays: 0, createdAt: new Date().toISOString(), isAdmin: false } as any;
+  saveUsers([...users, newUser]);
+  addTransaction({ userId: newUser.id, type: 'bonus', amount: REGISTRATION_BONUS || 0, status: 'completed', description: 'Registration bonus reward' } as any);
+  return { success: true, message: 'Registration successful', user: newUser };
+}
 
-  const pwStrength = (pwd: string) => {
-    if (!pwd) return null;
-    if (pwd.length < 6) return { label: 'Too short', color: '#ef4444', width: '20%' };
-    if (pwd.length < 8) return { label: 'Weak', color: '#f59e0b', width: '50%' };
-    if (/[A-Z]/.test(pwd) && /[0-9]/.test(pwd)) return { label: 'Strong', color: '#22c55e', width: '100%' };
-    return { label: 'Medium', color: '#c9a84c', width: '70%' };
-  };
-  const strength = pwStrength(newPw);
+// FIXED: login with name OR phone + password
+export function loginUser(identifier: string, password: string): { success: boolean; message: string; user?: User } {
+  initAdmin();
+  const users = getUsers();
+  const id = identifier.trim().toLowerCase();
+  const user = users.find(u => {
+    const phoneMatch = u.phone === identifier.trim() || u.phone.toLowerCase() === id;
+    const nameMatch = (u as any).name?.toLowerCase() === id || (u as any).username?.toLowerCase() === id || (u as any).fullName?.toLowerCase() === id;
+    return phoneMatch || nameMatch;
+  });
+  if (!user) return { success: false, message: 'Incorrect phone/name or password' };
+  if (user.password !== password) return { success: false, message: 'Incorrect password' };
+  setCurrentUser(user as any);
+  return { success: true, message: 'Login successful', user };
+}
 
-  return (
-    <div className="app-container min-h-screen" style={{ background: '#0a0a0a' }}>
-      <div className="px-6 pt-16 pb-10 text-center relative overflow-hidden">
-        <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.15) 0%, transparent 70%)' }} />
-        <div className="relative z-10">
-          <div className="flex items-center justify-center gap-3 mb-4">
-            <div className="flex flex-col gap-1"><div className="w-8 h-1.5 rounded-full gold-gradient" /><div className="w-8 h-1.5 rounded-full gold-gradient" /><div className="w-8 h-1.5 rounded-full gold-gradient" /></div>
-            <h1 className="text-4xl font-black tracking-tight gold-gradient-text">LEGEND</h1>
-          </div>
-          <p className="text-[#c9a84c] text-sm font-semibold tracking-widest uppercase">Investors Platform</p>
-          <p className="text-gray-600 text-xs mt-1">Uganda's Premium Investment Community</p>
-        </div>
-      </div>
+export function getTransactions(userId?: string): Transaction[] {
+  const data = safeParse<Transaction[]>(localStorage.getItem(KEYS.TRANSACTIONS), []);
+  if (!userId) return data;
+  return data.filter(t => (t as any).userId === userId);
+}
+export function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Transaction {
+  const transactions = getTransactions();
+  const newTx: Transaction = { ...tx, id: generateId(), createdAt: new Date().toISOString() } as any;
+  localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTx, ...transactions]));
+  return newTx;
+}
 
-      {view === 'login' && (
-        <>
-          <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
-            <h2 className="text-2xl font-bold text-white mb-1">Welcome Back</h2>
-            <p className="text-gray-500 text-sm mb-6">Sign in with name or phone</p>
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-400 mb-1.5 block">Name or Phone Number</label>
-                <div className="flex items-center rounded-xl px-3 py-3.5 focus-within:border-[#c9a84c] transition-colors" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
-                  <User size={16} className="text-gray-500 mr-2" />
-                  <input type="text" value={identifier} onChange={e => setIdentifier(e.target.value)} placeholder="Enter your name or phone number" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-sm font-medium text-gray-400">Password</label>
-                  <button onClick={() => { setResetPhone(''); setNewPw(''); setConfirmPw(''); setView('forgot'); }} className="text-[#c9a84c] text-xs font-semibold hover:underline">Forgot Password?</button>
-                </div>
-                <div className="flex items-center rounded-xl px-3 py-3.5 focus-within:border-[#c9a84c] transition-colors" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
-                  <Lock size={16} className="text-gray-500 mr-2" />
-                  <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter password" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-                  <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-2">{showPw ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                </div>
-              </div>
-              <button onClick={handleLogin} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60">{loading ? 'Signing in...' : 'Sign In'}</button>
-              <div className="text-center pt-1"><span className="text-gray-600 text-sm">Don't have an account? </span><Link to="/register" className="text-[#c9a84c] font-semibold text-sm">Register Now</Link></div>
-            </div>
-          </div>
-          <div className="mx-4 mt-4 grid grid-cols-3 gap-3">
-            {[
-              { label: 'Registration Bonus', value: 'UGX 9,000' },
-              { label: 'Daily Return', value: '27%-45%' },
-              { label: 'Daily Check-in', value: 'UGX 300' },
-            ].map(item => (
-              <div key={item.label} className="rounded-2xl p-3 text-center" style={{ background: '#151515', border: '1px solid rgba(201,168,76,0.2)' }}>
-                <p className="text-[#c9a84c] font-bold text-sm">{item.value}</p>
-                <p className="text-gray-600 text-[10px] mt-0.5">{item.label}</p>
-              </div>
-            ))}
-          </div>
-          <p className="text-center text-gray-600 text-xs mt-6 pb-8">Launching in Uganda — October 11, 2026</p>
-        </>
-      )}
+export function getRechargeOrders(userId?: string): RechargeOrder[] {
+  const all = safeParse<RechargeOrder[]>(localStorage.getItem(KEYS.RECHARGE_ORDERS), []);
+  if (!userId) return all;
+  return all.filter(o => (o as any).userId === userId);
+}
+export function createRechargeOrder(userId: string, amount: number, paymentMethod: string, phoneNumber: string): RechargeOrder {
+  const orders = getRechargeOrders();
+  const order: RechargeOrder = { id: generateId(), userId, amount, paymentMethod, phoneNumber, status: 'pending', createdAt: new Date().toISOString() } as any;
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify([order, ...orders]));
+  return order;
+}
+export function approveRechargeOrder(orderId: string): boolean {
+  const orders = getRechargeOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  orders[idx].status = 'completed' as any;
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders));
+  addTransaction({ userId: orders[idx].userId, type: 'recharge', amount: orders[idx].amount, status: 'completed', description: 'Recharge approved' } as any);
+  updateUser(orders[idx].userId, { balance: ((orders[idx] as any).amount || 0) + (getUsers().find(u=>u.id===orders[idx].userId)?.balance || 0) } as any);
+  return true;
+}
+export function rejectRechargeOrder(orderId: string): boolean {
+  const orders = getRechargeOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  orders[idx].status = 'rejected' as any;
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders));
+  return true;
+}
 
-      {view === 'forgot' && (
-        <div className="mx-4">
-          <div className="rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
-            <button onClick={() => setView('login')} className="flex items-center gap-1.5 text-gray-500 text-xs mb-5 hover:text-gray-300 transition-colors"><ArrowLeft size={14} /> Back to login</button>
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 rounded-xl gold-gradient flex items-center justify-center"><Lock size={16} className="text-black" /></div>
-              <div><h2 className="text-white font-bold text-lg">Reset Password</h2><p className="text-gray-500 text-xs">Request will be reviewed by admin</p></div>
-            </div>
-            <div className="rounded-xl p-3 mb-5" style={{ background: 'rgba(201,168,76,0.06)', border: '1px solid rgba(201,168,76,0.2)' }}>
-              <p className="text-[#c9a84c] text-xs font-semibold mb-2">How it works</p>
-              <div className="space-y-1.5 text-xs text-gray-400">
-                <div className="flex items-start gap-2"><span className="w-4 h-4 rounded-full gold-gradient flex-shrink-0 flex items-center justify-center text-black font-black text-[9px] mt-0.5">1</span><span>Enter your registered phone number and your desired new password</span></div>
-                <div className="flex items-start gap-2"><span className="w-4 h-4 rounded-full gold-gradient flex-shrink-0 flex items-center justify-center text-black font-black text-[9px] mt-0.5">2</span><span>Admin reviews and verifies your identity before approving</span></div>
-                <div className="flex items-start gap-2"><span className="w-4 h-4 rounded-full gold-gradient flex-shrink-0 flex items-center justify-center text-black font-black text-[9px] mt-0.5">3</span><span>Once approved, your new password is activated — you can sign in immediately</span></div>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div><label className="text-sm font-medium text-gray-400 mb-1.5 block">Registered Phone Number</label><div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}><Phone size={16} className="text-gray-500 mr-2" /><input type="tel" value={resetPhone} onChange={e => setResetPhone(e.target.value)} placeholder="Enter your phone number" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" /></div></div>
-              <div><label className="text-sm font-medium text-gray-400 mb-1.5 block">New Password</label><div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}><Lock size={16} className="text-gray-500 mr-2" /><input type={showNewPw ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="At least 6 characters" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" /><button onClick={() => setShowNewPw(!showNewPw)} className="text-gray-500 ml-2">{showNewPw ? <EyeOff size={15} /> : <Eye size={15} />}</button></div>{strength && (<div className="mt-1.5"><div className="h-1 rounded-full overflow-hidden" style={{ background: '#2a2a2a' }}><div className="h-full rounded-full transition-all duration-300" style={{ width: strength.width, background: strength.color }} /></div><p className="text-[10px] mt-0.5 font-medium" style={{ color: strength.color }}>{strength.label}</p></div>)}</div>
-              <div><label className="text-sm font-medium text-gray-400 mb-1.5 block">Confirm New Password</label><div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: `1.5px solid ${confirmPw && newPw === confirmPw ? 'rgba(34,197,94,0.5)' : '#333'}` }}><Lock size={16} className="text-gray-500 mr-2" /><input type={showConfirm ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Re-enter new password" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" /><div className="flex items-center gap-1 ml-2">{confirmPw && (newPw === confirmPw ? <CheckCircle size={13} className="text-green-400" /> : <span className="w-3 h-3 rounded-full" style={{ background: '#ef4444' }} />)}<button onClick={() => setShowConfirm(!showConfirm)} className="text-gray-500">{showConfirm ? <EyeOff size={15} /> : <Eye size={15} />}</button></div></div></div>
-              <button onClick={handleForgotSubmit} disabled={submitting} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-sm disabled:opacity-60 flex items-center justify-center gap-2">{submitting ? 'Submitting...' : 'Submit Reset Request'}</button>
-              <div className="pt-2 border-t" style={{ borderColor: '#222' }}><p className="text-gray-600 text-xs mb-2 text-center">Already submitted a request?</p><button onClick={() => { setStatusPhone(resetPhone); setView('status'); }} className="w-full py-3 rounded-xl text-xs font-semibold text-[#c9a84c]" style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}>Check Request Status</button></div>
-            </div>
-          </div>
-        </div>
-      )}
+export function getWithdrawOrders(userId?: string): WithdrawOrder[] { return safeParse<WithdrawOrder[]>(localStorage.getItem(KEYS.WITHDRAW_ORDERS), []).filter(o => !userId || (o as any).userId === userId); }
+export function createWithdrawOrder(userId: string, amount: number): { success: boolean; message: string; order?: WithdrawOrder } {
+  const user = getUsers().find(u => u.id === userId) || getCurrentUser();
+  if (!user) return { success: false, message: 'User not found' };
+  if (!(user as any).bankCard) return { success: false, message: 'No bank card linked' };
+  if (amount < 9000) return { success: false, message: 'Minimum withdrawal is UGX 9,000' };
+  if (amount > user.balance) return { success: false, message: 'Insufficient balance' };
+  const fee = Math.floor(amount * 0.16);
+  const received = amount - fee;
+  const orders = getWithdrawOrders();
+  const order: WithdrawOrder = { id: generateId(), userId, amount, receivedAmount: received, fee, bankCard: (user as any).bankCard, status: 'pending', createdAt: new Date().toISOString() } as any;
+  localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify([order, ...orders]));
+  updateUser(userId, { balance: user.balance - amount } as any);
+  return { success: true, message: 'Withdrawal submitted', order };
+}
+export function approveWithdrawOrder(orderId: string): boolean {
+  const orders = getWithdrawOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  orders[idx].status = 'completed' as any;
+  localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify(orders));
+  return true;
+}
+export function rejectWithdrawOrder(orderId: string): boolean {
+  const orders = getWithdrawOrders();
+  const idx = orders.findIndex(o => o.id === orderId);
+  if (idx === -1) return false;
+  const order = orders[idx];
+  orders.splice(idx, 1);
+  localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify(orders));
+  updateUser(order.userId, { balance: ((getUsers().find(u=>u.id===order.userId)?.balance||0) + order.amount) } as any);
+  return true;
+}
 
-      {view === 'status' && (
-        <div className="mx-4">
-          <div className="rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
-            <button onClick={() => setView('forgot')} className="flex items-center gap-1.5 text-gray-500 text-xs mb-5 hover:text-gray-300 transition-colors"><ArrowLeft size={14} /> Back</button>
-            <h2 className="text-white font-bold text-lg mb-1">Reset Request Status</h2>
-            <p className="text-gray-500 text-xs mb-5">Check the status of your password reset</p>
-            <div className="flex gap-2 mb-5">
-              <div className="flex-1 flex items-center rounded-xl px-3 py-3" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}><Phone size={14} className="text-gray-500 mr-2" /><input type="tel" value={statusPhone} onChange={e => { setStatusPhone(e.target.value); setStatusResult(null); }} placeholder="Enter phone number" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" /></div>
-              <button onClick={handleCheckStatus} disabled={checkingStatus} className="px-4 rounded-xl font-bold text-black text-sm gold-gradient disabled:opacity-60 flex items-center gap-1.5"><RefreshCw size={13} className={checkingStatus ? 'animate-spin' : ''} />Check</button>
-            </div>
-            {statusResult && (() => {
-              const s = statusResult;
-              const isApproved = s.status === 'approved';
-              const isRejected = s.status === 'rejected';
-              const isPending = s.status === 'pending';
-              return (
-                <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${isApproved ? 'rgba(34,197,94,0.3)' : isRejected ? 'rgba(239,68,68,0.3)' : 'rgba(245,158,11,0.3)'}` }}>
-                  <div className="px-4 py-3 flex items-center gap-2" style={{ background: isApproved ? 'rgba(34,197,94,0.08)' : isRejected ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)' }}>
-                    {isApproved ? <CheckCircle size={16} className="text-green-400" /> : isRejected ? <XCircle size={16} className="text-red-400" /> : <Clock size={16} className="text-yellow-400" />}
-                    <span className="font-bold text-sm" style={{ color: isApproved ? '#22c55e' : isRejected ? '#ef4444' : '#f59e0b' }}>{isApproved ? 'Approved' : isRejected ? 'Rejected' : 'Pending Review'}</span>
-                  </div>
-                  <div className="p-4 space-y-3" style={{ background: '#1a1a1a' }}>
-                    <div className="flex justify-between text-xs"><span className="text-gray-500">Phone</span><span className="text-white font-semibold">{s.phone}</span></div>
-                    <div className="flex justify-between text-xs"><span className="text-gray-500">Submitted</span><span className="text-gray-300">{new Date(s.createdAt).toLocaleString()}</span></div>
-                    {s.resolvedAt && <div className="flex justify-between text-xs"><span className="text-gray-500">Resolved At</span><span className="text-gray-300">{new Date(s.resolvedAt).toLocaleString()}</span></div>}
-                    {s.note && <div className="rounded-xl p-2.5" style={{ background: 'rgba(239,68,68,0.08)' }}><p className="text-gray-500 text-[10px] mb-0.5">Admin note:</p><p className="text-red-300 text-xs">{s.note}</p></div>}
-                    {isPending && <div className="rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}><p className="text-yellow-400 text-xs font-semibold mb-1">Under Review</p><p className="text-gray-500 text-[10px]">Our admin team will verify your identity and approve the request.</p></div>}
-                    {isApproved && <div className="rounded-xl p-3" style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)' }}><p className="text-green-400 text-xs font-semibold mb-1">Password Reset Successful!</p><p className="text-gray-500 text-[10px]">Your new password is now active.</p></div>}
-                    {isApproved && <button onClick={() => setView('login')} className="w-full py-3.5 rounded-xl font-bold text-black text-sm gold-gradient mt-1">Go to Login</button>}
-                    {isRejected && <button onClick={() => { setResetPhone(s.phone); setNewPw(''); setConfirmPw(''); setView('forgot'); }} className="w-full py-3 rounded-xl font-bold text-sm" style={{ background: 'rgba(201,168,76,0.1)', color: '#c9a84c', border: '1px solid rgba(201,168,76,0.2)' }}>Submit New Request</button>}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-    </div>
-  );
+export function getUserProducts(userId?: string): UserProduct[] { return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); }
+export function saveUserProducts(products: UserProduct[]): void { localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify(products)); }
+
+export function creditDailyIncome(userId: string): { credited: number } {
+  try {
+    const user = getUsers().find(u => u.id === userId);
+    if (!user) return { credited: 0 };
+    const products = getUserProducts(userId).filter(p => p.status === 'active');
+    if (!products.length) return { credited: 0 };
+    const dailySum = products.reduce((s, p) => s + ((p as any).dailyIncome || 0), 0);
+    if (!dailySum) return { credited: 0 };
+    const lastMap = safeParse<Record<string, number>>(localStorage.getItem(KEYS.LAST_DAILY_CREDIT), {});
+    const last = lastMap[userId] || 0;
+    const now = Date.now();
+    const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
+    if (last >= startOfToday) return { credited: 0 };
+    updateUser(userId, { balance: (user.balance || 0) + dailySum, cumulativeIncome: (user.cumulativeIncome || 0) + dailySum } as any);
+    addTransaction({ userId, type: 'daily-income', amount: dailySum, status: 'completed', description: 'Daily product income' } as any);
+    lastMap[userId] = now;
+    localStorage.setItem(KEYS.LAST_DAILY_CREDIT, JSON.stringify(lastMap));
+    return { credited: dailySum };
+  } catch { return { credited: 0 }; }
+}
+
+export function getNextPayoutMs(userId?: string): number {
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return Math.max(0, next.getTime() - now.getTime());
+}
+
+export function performCheckIn(userId: string): { success: boolean; reward?: number; message?: string } {
+  try {
+    const user = getUsers().find(u => u.id === userId);
+    if (!user) return { success: false, message: 'User not found' };
+    const today = new Date().toDateString();
+    if (user.lastCheckIn === today) return { success: false, message: 'Already checked in today' };
+    const reward = CHECKIN_REWARD || 300;
+    const newCheckInDays = (user.checkInDays || 0) + 1;
+    updateUser(userId, { balance: (user.balance || 0) + reward, cumulativeIncome: (user.cumulativeIncome || 0) + reward, lastCheckIn: today, checkInDays: newCheckInDays } as any);
+    addTransaction({ userId, type: 'checkin', amount: reward, status: 'completed', description: 'Daily check-in reward' } as any);
+    return { success: true, reward };
+  } catch (e) { return { success: false, message: 'Check-in failed' }; }
+}
+
+export function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): { success: boolean; message: string } {
+  const user = getUsers().find(u => u.id === userId) || getCurrentUser();
+  if (!user) return { success: false, message: 'User not found' };
+  if (user.balance < price) return { success: false, message: 'Insufficient balance' };
+  updateUser(user.id, { balance: user.balance - price } as any);
+  const products = getUserProducts(userId);
+  const userProduct: UserProduct = { id: generateId(), userId, productId, price, dailyIncome, term, purchasedAt: new Date().toISOString(), status: 'active' } as any;
+  saveUserProducts([userProduct, ...products]);
+  addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId}` } as any);
+  return { success: true, message: 'Product purchased successfully' };
+}
+
+export function getGiftCodes(): GiftCode[] { return safeParse<GiftCode[]>(localStorage.getItem(KEYS.GIFT_CODES), []); }
+export function createGiftCode(amount: number, note?: string, expiresAt?: string): GiftCode {
+  const codes = getGiftCodes();
+  const codeObj: GiftCode = { id: generateId(), code: generateReferralCode(), amount, createdAt: new Date().toISOString(), note: note || '', expiresAt } as any;
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify([codeObj, ...codes]));
+  return codeObj;
+}
+export function deleteGiftCode(id: string): boolean {
+  const codes = getGiftCodes();
+  const idx = codes.findIndex(c => c.id === id);
+  if (idx === -1) return false;
+  codes.splice(idx, 1);
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes));
+  return true;
+}
+
+export function getPasswordResets(): PasswordResetRequest[] { return safeParse<PasswordResetRequest[]>(localStorage.getItem(KEYS.PASSWORD_RESETS), []); }
+export function createPasswordResetRequest(phone: string, newPassword: string, note?: string): PasswordResetRequest {
+  const reqs = getPasswordResets();
+  const req: PasswordResetRequest = { id: generateId(), phone, newPassword, status: 'pending', createdAt: new Date().toISOString(), note };
+  localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify([req, ...reqs]));
+  return req;
+}
+export function approvePasswordReset(id: string): boolean {
+  const reqs = getPasswordResets();
+  const idx = reqs.findIndex(r => r.id === id);
+  if (idx === -1) return false;
+  reqs[idx].status = 'approved';
+  reqs[idx].resolvedAt = new Date().toISOString();
+  localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs));
+  const req = reqs[idx];
+  const users = getUsers();
+  const uidx = users.findIndex(u => u.phone === req.phone);
+  if (uidx !== -1) {
+    users[uidx].password = req.newPassword;
+    saveUsers(users);
+    const supaRaw = localStorage.getItem('legend_user');
+    if (supaRaw) {
+      try { const su = JSON.parse(supaRaw); if (su.phone === req.phone) { su.password = req.newPassword; localStorage.setItem('legend_user', JSON.stringify(su)); } } catch {}
+    }
+  }
+  return true;
+}
+export function rejectPasswordReset(id: string, note?: string): boolean {
+  const reqs = getPasswordResets();
+  const idx = reqs.findIndex(r => r.id === id);
+  if (idx === -1) return false;
+  reqs[idx].status = 'rejected';
+  reqs[idx].resolvedAt = new Date().toISOString();
+  reqs[idx].note = note || reqs[idx].note;
+  localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs));
+  return true;
+}
+
+export function getTeamMembers(userId: string) {
+  const users = getUsers();
+  const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId);
+  const level1Ids = level1.map(u => u.id);
+  const level2 = users.filter(u => level1Ids.includes(u.referredBy as any) || level1Ids.includes((u as any).referred_by));
+  const level2Ids = level2.map(u => u.id);
+  const level3 = users.filter(u => level2Ids.includes(u.referredBy as any) || level2Ids.includes((u as any).referred_by));
+  return { level1, level2, level3 };
+}
+
+export function getTeamCommissions(userId: string) {
+  const { level1, level2, level3 } = getTeamMembers(userId);
+  const sum = (arr: User[]) => arr.reduce((s, u) => s + (u.balance || 0), 0);
+  const c1 = sum(level1) * (LEVEL1_RATE || 0.27);
+  const c2 = sum(level2) * (LEVEL2_RATE || 0.02);
+  const c3 = sum(level3) * (LEVEL3_RATE || 0.01);
+  return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) };
+}
+
+// --- FIX FOR BUILD ERROR D7thKo1Yq ---
+export function createPasswordReset(phone: string, newPassword: string) {
+  const users = getUsers();
+  if (!users.find(u => u.phone === phone)) {
+    return { success: false, message: 'Phone not registered' };
+  }
+  createPasswordResetRequest(phone, newPassword);
+  return { success: true, message: 'Request submitted' };
+}
+
+export function getPasswordResetStatus(phone: string) {
+  const all = getPasswordResets();
+  const found = all
+    .filter(r => r.phone === phone)
+    .sort((a,b)=> new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  return found || null;
 }
