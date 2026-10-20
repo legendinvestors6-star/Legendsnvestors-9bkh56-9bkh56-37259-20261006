@@ -2,9 +2,8 @@ import type { User, Transaction, RechargeOrder, WithdrawOrder, UserProduct } fro
 import { REGISTRATION_BONUS, PRODUCTS, MTN_ACCOUNT, MTN_NAME, LEVEL1_RATE, LEVEL2_RATE, LEVEL3_RATE, CHECKIN_REWARD } from '@/constants/products';
 import { createClient } from '@supabase/supabase-js';
 
-// Supabase for cloud (kept for compatibility; safe if env vars are undefined)
-const supabase = createClient(
-  // fall back to empty strings if env not present so build doesn't fail at compile time
+// Supabase for cloud
+export const supabase = createClient(
   (import.meta as any).env?.VITE_SUPABASE_URL || '',
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
 );
@@ -218,10 +217,8 @@ export function rejectWithdrawOrder(orderId: string): boolean {
 }
 
 export function getUserProducts(userId?: string): UserProduct[] { return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); }
-
 export function saveUserProducts(products: UserProduct[]): void { localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify(products)); }
 
-// Credits daily income once per calendar day per user. Returns { credited: number }
 export function creditDailyIncome(userId: string): { credited: number } {
   try {
     const user = getUsers().find(u => u.id === userId);
@@ -230,15 +227,11 @@ export function creditDailyIncome(userId: string): { credited: number } {
     if (!products.length) return { credited: 0 };
     const dailySum = products.reduce((s, p) => s + ((p as any).dailyIncome || 0), 0);
     if (!dailySum) return { credited: 0 };
-
-    // only credit once per calendar day
     const lastMap = safeParse<Record<string, number>>(localStorage.getItem(KEYS.LAST_DAILY_CREDIT), {});
     const last = lastMap[userId] || 0;
     const now = Date.now();
     const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime();
-    if (last >= startOfToday) return { credited: 0 }; // already credited today
-
-    // credit
+    if (last >= startOfToday) return { credited: 0 };
     updateUser(userId, { balance: (user.balance || 0) + dailySum, cumulativeIncome: (user.cumulativeIncome || 0) + dailySum } as any);
     addTransaction({ userId, type: 'daily-income', amount: dailySum, status: 'completed', description: 'Daily product income' } as any);
     lastMap[userId] = now;
@@ -247,22 +240,19 @@ export function creditDailyIncome(userId: string): { credited: number } {
   } catch { return { credited: 0 }; }
 }
 
-// Returns ms until next payout (start of next calendar day)
 export function getNextPayoutMs(userId?: string): number {
   const now = new Date();
   const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   return Math.max(0, next.getTime() - now.getTime());
 }
 
-// Perform a daily check-in for a user. Returns { success: boolean, reward?: number, message?: string }
 export function performCheckIn(userId: string): { success: boolean; reward?: number; message?: string } {
   try {
     const user = getUsers().find(u => u.id === userId);
     if (!user) return { success: false, message: 'User not found' };
     const today = new Date().toDateString();
     if (user.lastCheckIn === today) return { success: false, message: 'Already checked in today' };
-
-    const reward = CHECKIN_REWARD || 300; // fixed daily reward
+    const reward = CHECKIN_REWARD || 300;
     const newCheckInDays = (user.checkInDays || 0) + 1;
     updateUser(userId, { balance: (user.balance || 0) + reward, cumulativeIncome: (user.cumulativeIncome || 0) + reward, lastCheckIn: today, checkInDays: newCheckInDays } as any);
     addTransaction({ userId, type: 'checkin', amount: reward, status: 'completed', description: 'Daily check-in reward' } as any);
@@ -274,9 +264,7 @@ export function purchaseProduct(userId: string, productId: number, price: number
   const user = getUsers().find(u => u.id === userId) || getCurrentUser();
   if (!user) return { success: false, message: 'User not found' };
   if (user.balance < price) return { success: false, message: 'Insufficient balance' };
-  // Deduct balance
   updateUser(user.id, { balance: user.balance - price } as any);
-  // Create user product
   const products = getUserProducts(userId);
   const userProduct: UserProduct = { id: generateId(), userId, productId, price, dailyIncome, term, purchasedAt: new Date().toISOString(), status: 'active' } as any;
   saveUserProducts([userProduct, ...products]);
@@ -284,7 +272,6 @@ export function purchaseProduct(userId: string, productId: number, price: number
   return { success: true, message: 'Product purchased successfully' };
 }
 
-// Gift code helpers
 export function getGiftCodes(): GiftCode[] { return safeParse<GiftCode[]>(localStorage.getItem(KEYS.GIFT_CODES), []); }
 export function createGiftCode(amount: number, note?: string, expiresAt?: string): GiftCode {
   const codes = getGiftCodes();
@@ -301,7 +288,6 @@ export function deleteGiftCode(id: string): boolean {
   return true;
 }
 
-// Password reset helpers
 export function getPasswordResets(): PasswordResetRequest[] { return safeParse<PasswordResetRequest[]>(localStorage.getItem(KEYS.PASSWORD_RESETS), []); }
 export function createPasswordResetRequest(phone: string, newPassword: string, note?: string): PasswordResetRequest {
   const reqs = getPasswordResets();
@@ -316,14 +302,12 @@ export function approvePasswordReset(id: string): boolean {
   reqs[idx].status = 'approved';
   reqs[idx].resolvedAt = new Date().toISOString();
   localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs));
-  // apply password to user if exists
   const req = reqs[idx];
   const users = getUsers();
   const uidx = users.findIndex(u => u.phone === req.phone);
   if (uidx !== -1) {
     users[uidx].password = req.newPassword;
     saveUsers(users);
-    // update legend_user if currently logged in
     const supaRaw = localStorage.getItem('legend_user');
     if (supaRaw) {
       try { const su = JSON.parse(supaRaw); if (su.phone === req.phone) { su.password = req.newPassword; localStorage.setItem('legend_user', JSON.stringify(su)); } } catch {}
@@ -342,7 +326,6 @@ export function rejectPasswordReset(id: string, note?: string): boolean {
   return true;
 }
 
-// Team helpers
 export function getTeamMembers(userId: string) {
   const users = getUsers();
   const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId);
@@ -360,7 +343,4 @@ export function getTeamCommissions(userId: string) {
   const c2 = sum(level2) * (LEVEL2_RATE || 0.02);
   const c3 = sum(level3) * (LEVEL3_RATE || 0.01);
   return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) };
-}
-
-// small exports for compatibility
-export { supabase, getGiftCodes, createGiftCode, deleteGiftCode, getPasswordResets, createPasswordResetRequest, approvePasswordReset, rejectPasswordReset, getTeamMembers, getTeamCommissions };
+  }
