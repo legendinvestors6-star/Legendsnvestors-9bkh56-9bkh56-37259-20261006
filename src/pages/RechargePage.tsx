@@ -26,47 +26,23 @@ export default function Recharge(){
        clearInterval(interval)
        setPolling(false)
        setLoading(false)
-       alert("Still pending. If you paid, it will auto-credit shortly. Check Recharge History.")
-       window.location.href = "/recharge-history"
+       toast("Still pending. If you paid, it will auto-credit shortly.")
        return
      }
      const { data } = await supabase.from('recharges').select('status').eq('reference', reference).single()
      if(data?.status === 'completed') {
        clearInterval(interval)
-       try {
-         const users = JSON.parse(localStorage.getItem('users') || '[]')
-         const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}')
-         const idx = users.findIndex((u:any) => u.id === currentUser.id || u.phone === currentUser.phone)
-         if(idx!== -1) {
-           users[idx].balance = (users[idx].balance || 0) + numAmount
-           localStorage.setItem('users', JSON.stringify(users))
-           const updatedCurrent = {...currentUser, balance: users[idx].balance}
-           localStorage.setItem('currentUser', JSON.stringify(updatedCurrent))
-         } else {
-           currentUser.balance = (currentUser.balance || 0) + numAmount
-           localStorage.setItem('currentUser', JSON.stringify(currentUser))
-         }
-         setPolling(false)
-         setLoading(false)
-         toast.success(`✅ ${numAmount.toLocaleString()} UGX credited!`)
-         setTimeout(() => window.location.href = "/", 1500)
-       } catch(e) {
-         window.location.href = "/"
-       }
+       setPolling(false)
+       setLoading(false)
+       toast.success(`✅ ${numAmount.toLocaleString()} UGX credited!`)
      }
    }, 3000)
  }
 
  const handleRecharge = async () => {
   const num = Number(amount);
-  if (!num || num < MIN) {
-    alert("Minimum is UGX 30,000");
-    return;
-  }
-  if (!phone.trim()) {
-    alert("Enter phone number");
-    return;
-  }
+  if (!num || num < MIN) { toast.error("Minimum is UGX 30,000"); return; }
+  if (!phone.trim()) { toast.error("Enter phone number"); return; }
   setLoading(true);
   try {
     const cleanPhone = phone.trim();
@@ -80,24 +56,26 @@ export default function Recharge(){
       body: JSON.stringify({ amount: num, phone: cleanPhone, userId: cleanPhone, provider: autoProvider })
     });
 
-    const text = await res.text()
-    let data: any
-    try { data = JSON.parse(text) } catch { throw new Error(text.slice(0,300) || "Empty response") }
-
+    // --- FIXED PART START ---
     if(!res.ok) {
-      const realError = data?.pesajet_data?.message || data?.pesajet_data?.error || data?.raw || JSON.stringify(data).slice(0,400)
-      throw new Error(realError || "Payment failed")
+      const txt = await res.text();
+      let errMsg = `Server error ${res.status}`;
+      try { const j = JSON.parse(txt); errMsg = j.error || j.message || errMsg; } catch { if(txt) errMsg = txt.slice(0,300); }
+      // This will now show REAL reason instead of "Empty response"
+      if(res.status === 404) errMsg = "API /api/payments/create not found - Create file api/payments/create.ts at ROOT";
+      throw new Error(errMsg);
     }
+    const data = await res.json();
+    // --- FIXED PART END ---
 
     const reference = data.reference
     if(reference) {
       startAutoPolling(reference, num)
     } else {
-      alert(`STK sent to ${phone}!`)
-      window.location.href = "/recharge-history"
+      toast.success(`STK sent to ${phone}!`)
     }
   } catch (e: any) {
-    alert("Error: " + e.message)
+    toast.error("Error: " + e.message)
     setLoading(false)
   }
  }
