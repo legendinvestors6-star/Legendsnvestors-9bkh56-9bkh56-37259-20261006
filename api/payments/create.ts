@@ -7,59 +7,50 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') return res.status(200).end()
 
   try {
-    const { amount, phone, userId, provider } = req.body
+    const { amount, phone, provider } = req.body
     let formatted = String(phone||'').replace(/\s/g,'').replace('+','')
     if (formatted.startsWith('0')) formatted = '256' + formatted.slice(1)
 
-    const supabase = createClient(
-      process.env.VITE_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-    const reference = `LGD${Date.now()}${Math.floor(Math.random()*1000)}`
-
-    await supabase.from('recharges').insert([{
-      reference, amount: Number(amount), phone: formatted,
-      user_id: userId, provider, status: 'pending'
-    }])
-
     const key = process.env.PESAJET_PUBLIC_KEY!
-    const base = process.env.PESAJET_BASE_URL || "https://pay.pesajet.com/api/v1"
-    
-    // This will now be correct once you set PESAJET_BASE_URL
-    const url = `${base.replace(/\/$/,'')}/collections`
+    const reference = `LGD${Date.now()}`
 
-    console.log("PesaJet FINAL try:", url)
+    const urls = [
+      "https://pay.pesajet.com/api/v1/collections",
+      "https://pay.pesajet.com/api/collections",
+      "https://pay.pesajet.com/api/v1/collection",
+      "https://api.pay.pesajet.com/api/v1/collections",
+      "https://merchant.pesajet.com/api/v1/collections",
+      "https://api.pesajet.com/api/collections",
+      "https://pesajet.com/api/v1/collections",
+      "https://api.pesajet.com/api/v2/collections",
+      "https://api.pesajet.com/api/v1/payments",
+      "https://pay.pesajet.com/api/v1/payments",
+      "https://api.pesajet.com/api/v1/payment/request",
+      "https://pesajet.com/api/collections/request",
+    ]
 
-    const pjRes = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`,
-        "Accept": "application/json"
-      },
-      body: JSON.stringify({
-        amount: Number(amount),
-        phone: formatted,
-        reference,
-        provider: provider, // airtel or mtn
-        currency: "UGX",
-        callback_url: "https://legendsnvestors-9bkh56.vercel.app/api/pesajet/webhook"
-      })
-    })
-
-    const txt = await pjRes.text()
-    console.log("PesaJet FINAL response:", txt, "Status:", pjRes.status)
-
-    await supabase.from('recharges').update({ pesajet_response: txt }).eq('reference', reference)
-
-    if (!pjRes.ok) {
-      return res.status(200).json({ reference, status: 'failed', pesajet_error: txt, url_tried: url })
+    for (const url of urls) {
+      console.log(`Trying: ${url}`)
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}`, "Accept": "application/json" },
+          body: JSON.stringify({ amount: Number(amount), phone: formatted, reference, provider, currency: "UGX" })
+        })
+        const txt = await r.text()
+        console.log(`Result ${url} => Status ${r.status} => ${txt.substring(0, 300)}`)
+        if (r.status !== 404) {
+          // Found something that is NOT 404 - this is the real endpoint!
+          return res.status(200).json({ found_url: url, status: r.status, response: txt })
+        }
+      } catch (e: any) {
+        console.log(`Error ${url}: ${e.message}`)
+      }
     }
 
-    return res.status(200).json({ reference, status: 'pending', message: 'STK sent', pesajet_data: txt })
+    return res.status(200).json({ error: "All URLs 404 - your PesaJet account is NOT on pay.pesajet.com or api.pesajet.com - you need API docs from dashboard" })
 
   } catch (e: any) {
-    console.error(e)
     return res.status(500).json({ error: e.message })
   }
 }
