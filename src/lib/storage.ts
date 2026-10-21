@@ -2,7 +2,6 @@ import type { User, Transaction, RechargeOrder, WithdrawOrder, UserProduct } fro
 import { REGISTRATION_BONUS, PRODUCTS, MTN_ACCOUNT, MTN_NAME, LEVEL1_RATE, LEVEL2_RATE, LEVEL3_RATE, CHECKIN_REWARD } from '@/constants/products';
 import { createClient } from '@supabase/supabase-js';
 
-// Supabase for cloud
 export const supabase = createClient(
   (import.meta as any).env?.VITE_SUPABASE_URL || '',
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
@@ -59,6 +58,7 @@ export function getCurrentUser(): User | null {
         id: u.id,
         phone: u.phone,
         password: u.password || '',
+        fullName: u.fullName || u.full_name || u.name || '',
         balance: Number(u.balance || 0),
         cumulativeIncome: Number(u.cumulativeIncome || 0) || 0,
         level: u.level || 1,
@@ -96,6 +96,7 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
       const u = JSON.parse(raw) as any;
       if (u.id === userId) {
         const updated = { ...u, ...updates, balance: (updates as any).balance ?? u.balance } as any;
+        if ((updates as any).fullName) updated.fullName = (updates as any).fullName;
         if ((updates as any).referralCode) updated.referral_code = (updates as any).referralCode;
         if ((updates as any).lastCheckIn) updated.lastCheckIn = (updates as any).lastCheckIn;
         if ((updates as any).checkInDays !== undefined) updated.checkInDays = (updates as any).checkInDays;
@@ -107,7 +108,7 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) return null;
-  users[idx] = { ...users[idx], ...updates };
+  users[idx] = { ...users[idx], ...updates } as any;
   saveUsers(users);
   return users[idx];
 }
@@ -116,7 +117,8 @@ export function formatUGX(amount: number): string {
   try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; }
 }
 
-export function registerUser(phone: string, password: string, referralCode?: string): { success: boolean; message: string; user?: User } {
+// UPDATED: Now accepts fullName as 4th param
+export function registerUser(phone: string, password: string, referralCode?: string, fullName?: string): { success: boolean; message: string; user?: User } {
   initAdmin();
   const users = getUsers();
   if (users.find(u => u.phone === phone)) return { success: false, message: 'Phone number already registered' };
@@ -125,10 +127,26 @@ export function registerUser(phone: string, password: string, referralCode?: str
     const referrer = users.find(u => u.referralCode === referralCode.toUpperCase());
     if (referrer) referredBy = referrer.id;
   }
-  const newUser: User = { id: generateId(), phone, password, balance: REGISTRATION_BONUS || 0, cumulativeIncome: 0, level: 1, referralCode: generateReferralCode(), referredBy, checkInDays: 0, createdAt: new Date().toISOString(), isAdmin: false } as any;
+  const newUser: any = { 
+    id: generateId(), 
+    phone, 
+    password, 
+    fullName: fullName?.trim() || '', 
+    name: fullName?.trim() || '', 
+    full_name: fullName?.trim() || '',
+    balance: REGISTRATION_BONUS || 9000, 
+    cumulativeIncome: 0, 
+    level: 1, 
+    referralCode: generateReferralCode(), 
+    referredBy, 
+    checkInDays: 0, 
+    createdAt: new Date().toISOString(), 
+    isAdmin: false 
+  };
   saveUsers([...users, newUser]);
-  addTransaction({ userId: newUser.id, type: 'bonus', amount: REGISTRATION_BONUS || 0, status: 'completed', description: 'Registration bonus reward' } as any);
-  return { success: true, message: 'Registration successful', user: newUser };
+  addTransaction({ userId: newUser.id, type: 'bonus', amount: REGISTRATION_BONUS || 9000, status: 'completed', description: `Registration bonus for ${fullName || phone}` } as any);
+  setCurrentUser(newUser);
+  return { success: true, message: 'Registration successful', user: newUser as User };
 }
 
 export function loginUser(identifier: string, password: string): { success: boolean; message: string; user?: User } {
@@ -137,7 +155,7 @@ export function loginUser(identifier: string, password: string): { success: bool
   const id = identifier.trim().toLowerCase();
   const user = users.find(u => {
     const phoneMatch = u.phone === identifier.trim() || u.phone.toLowerCase() === id;
-    const nameMatch = (u as any).name?.toLowerCase() === id || (u as any).username?.toLowerCase() === id || (u as any).fullName?.toLowerCase() === id;
+    const nameMatch = (u as any).fullName?.toLowerCase() === id || (u as any).name?.toLowerCase() === id || (u as any).username?.toLowerCase() === id;
     return phoneMatch || nameMatch;
   });
   if (!user) return { success: false, message: 'Incorrect phone/name or password' };
@@ -146,6 +164,7 @@ export function loginUser(identifier: string, password: string): { success: bool
   return { success: true, message: 'Login successful', user };
 }
 
+// Rest of your functions stay same...
 export function getTransactions(userId?: string): Transaction[] {
   const data = safeParse<Transaction[]>(localStorage.getItem(KEYS.TRANSACTIONS), []);
   if (!userId) return data;
@@ -157,7 +176,6 @@ export function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Trans
   localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTx, ...transactions]));
   return newTx;
 }
-
 export function getRechargeOrders(userId?: string): RechargeOrder[] {
   const all = safeParse<RechargeOrder[]>(localStorage.getItem(KEYS.RECHARGE_ORDERS), []);
   if (!userId) return all;
@@ -187,7 +205,6 @@ export function rejectRechargeOrder(orderId: string): boolean {
   localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders));
   return true;
 }
-
 export function getWithdrawOrders(userId?: string): WithdrawOrder[] { return safeParse<WithdrawOrder[]>(localStorage.getItem(KEYS.WITHDRAW_ORDERS), []).filter(o => !userId || (o as any).userId === userId); }
 export function createWithdrawOrder(userId: string, amount: number): { success: boolean; message: string; order?: WithdrawOrder } {
   const user = getUsers().find(u => u.id === userId) || getCurrentUser();
@@ -221,10 +238,8 @@ export function rejectWithdrawOrder(orderId: string): boolean {
   updateUser(order.userId, { balance: ((getUsers().find(u=>u.id===order.userId)?.balance||0) + order.amount) } as any);
   return true;
 }
-
 export function getUserProducts(userId?: string): UserProduct[] { return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); }
 export function saveUserProducts(products: UserProduct[]): void { localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify(products)); }
-
 export function creditDailyIncome(userId: string): { credited: number } {
   try {
     const user = getUsers().find(u => u.id === userId);
@@ -245,13 +260,11 @@ export function creditDailyIncome(userId: string): { credited: number } {
     return { credited: dailySum };
   } catch { return { credited: 0 }; }
 }
-
 export function getNextPayoutMs(userId?: string): number {
   const now = new Date();
   const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   return Math.max(0, next.getTime() - now.getTime());
 }
-
 export function performCheckIn(userId: string): { success: boolean; reward?: number; message?: string } {
   try {
     const user = getUsers().find(u => u.id === userId);
@@ -265,7 +278,6 @@ export function performCheckIn(userId: string): { success: boolean; reward?: num
     return { success: true, reward };
   } catch (e) { return { success: false, message: 'Check-in failed' }; }
 }
-
 export function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): { success: boolean; message: string } {
   const user = getUsers().find(u => u.id === userId) || getCurrentUser();
   if (!user) return { success: false, message: 'User not found' };
@@ -277,7 +289,6 @@ export function purchaseProduct(userId: string, productId: number, price: number
   addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId}` } as any);
   return { success: true, message: 'Product purchased successfully' };
 }
-
 export function getGiftCodes(): GiftCode[] { return safeParse<GiftCode[]>(localStorage.getItem(KEYS.GIFT_CODES), []); }
 export function createGiftCode(amount: number, note?: string, expiresAt?: string): GiftCode {
   const codes = getGiftCodes();
@@ -293,7 +304,6 @@ export function deleteGiftCode(id: string): boolean {
   localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes));
   return true;
 }
-
 export function getPasswordResets(): PasswordResetRequest[] { return safeParse<PasswordResetRequest[]>(localStorage.getItem(KEYS.PASSWORD_RESETS), []); }
 export function createPasswordResetRequest(phone: string, newPassword: string, note?: string): PasswordResetRequest {
   const reqs = getPasswordResets();
@@ -327,7 +337,6 @@ export function rejectPasswordReset(id: string, note?: string): boolean {
   localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs));
   return true;
 }
-
 export function getTeamMembers(userId: string) {
   const users = getUsers();
   const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId);
@@ -337,7 +346,6 @@ export function getTeamMembers(userId: string) {
   const level3 = users.filter(u => level2Ids.includes(u.referredBy as any) || level2Ids.includes((u as any).referred_by));
   return { level1, level2, level3 };
 }
-
 export function getTeamCommissions(userId: string) {
   const { level1, level2, level3 } = getTeamMembers(userId);
   const sum = (arr: User[]) => arr.reduce((s, u) => s + (u.balance || 0), 0);
@@ -346,21 +354,17 @@ export function getTeamCommissions(userId: string) {
   const c3 = sum(level3) * (LEVEL3_RATE || 0.01);
   return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) };
 }
-
-// --- FIXES FOR BUILD ERRORS ---
 export function createPasswordReset(phone: string, newPassword: string) {
   const users = getUsers();
   if (!users.find(u => u.phone === phone)) return { success: false, message: 'Phone not registered' };
   createPasswordResetRequest(phone, newPassword);
   return { success: true, message: 'Request submitted' };
 }
-
 export function getPasswordResetStatus(phone: string) {
   const all = getPasswordResets();
   const found = all.filter(r => r.phone === phone).sort((a,b)=> new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
   return found || null;
 }
-
 export function redeemGiftCode(userId: string, code: string): { success: boolean; message: string; amount?: number } {
   const codes = getGiftCodes();
   const idx = codes.findIndex(c => c.code.toUpperCase() === code.trim().toUpperCase());
@@ -377,6 +381,5 @@ export function redeemGiftCode(userId: string, code: string): { success: boolean
   addTransaction({ userId, type: 'gift', amount: gift.amount, status: 'completed', description: `Redeemed gift code ${gift.code}` } as any);
   return { success: true, message: `Successfully redeemed ${formatUGX(gift.amount)}`, amount: gift.amount };
 }
-
 export const redeemGift = redeemGiftCode;
 export const redeemCode = redeemGiftCode;
