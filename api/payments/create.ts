@@ -25,43 +25,57 @@ export default async function handler(req: any, res: any) {
     const key = process.env.PESAJET_PUBLIC_KEY!
     const url = "https://payments.pesajet.com/api/v1/payments"
 
+    // FIXED payload per error message
     const payload = {
       amount: Number(amount),
-      phone: formatted,
+      phoneNumber: formatted,        // was 'phone' -> now 'phoneNumber'
       reference,
-      provider: provider, // airtel / mtn
+      provider: provider,           // try 'airtel' / 'mtn' - if fails, try 'AIRTEL_UG' / 'MTN_UG'
       currency: "UGX",
-      callback_url: "https://legendsnvestors-9bkh56.vercel.app/api/pesajet/webhook"
+      // callback_url removed - it said should not exist
+      // If webhook needed, try callbackUrl or webhook
+      callbackUrl: "https://legendsnvestors-9bkh56.vercel.app/api/pesajet/webhook"
     }
 
-    console.log("Trying auth methods for:", url)
+    console.log("Fixed payload:", payload)
 
-    // Try 3 auth styles that PesaJet Pay uses
-    const authTries = [
-      { "Content-Type": "application/json", "x-api-key": key, "Accept": "application/json" },
-      { "Content-Type": "application/json", "X-API-KEY": key, "Accept": "application/json" },
-      { "Content-Type": "application/json", "api-key": key, "Accept": "application/json" },
-      { "Content-Type": "application/json", "Authorization": `ApiKey ${key}`, "Accept": "application/json" },
-    ]
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(payload)
+    })
 
-    for (const headers of authTries) {
-      console.log("Trying headers:", JSON.stringify(headers))
-      const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) })
-      const txt = await r.text()
-      console.log(`Auth ${Object.keys(headers)[1]} => Status ${r.status} => ${txt.substring(0,500)}`)
-      
-      if (r.status !== 401) {
-        // Found correct auth!
-        await supabase.from('recharges').update({ pesajet_response: txt }).eq('reference', reference)
-        if (r.ok) {
-          return res.status(200).json({ reference, status: 'pending', message: `STK sent to ${formatted}`, pesajet_data: txt, auth_used: headers })
-        } else {
-          return res.status(200).json({ reference, status: 'failed', pesajet_error: txt, auth_used: headers })
+    const txt = await r.text()
+    console.log(`Status ${r.status} => ${txt}`)
+
+    await supabase.from('recharges').update({ pesajet_response: txt }).eq('reference', reference)
+
+    if (!r.ok) {
+      // Try alternative provider format if still 400
+      if (txt.includes('provider')) {
+        console.log("Trying AIRTEL_UG format...")
+        const altPayload = { ...payload, provider: provider === 'airtel' ? 'AIRTEL_UG' : 'MTN_UG' }
+        const r2 = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": key, "Accept": "application/json" },
+          body: JSON.stringify(altPayload)
+        })
+        const txt2 = await r2.text()
+        console.log(`Alt provider Status ${r2.status} => ${txt2}`)
+        await supabase.from('recharges').update({ pesajet_response: txt2 }).eq('reference', reference)
+        if (r2.ok) {
+          return res.status(200).json({ reference, status: 'pending', message: `STK sent to ${formatted}`, pesajet_data: txt2 })
         }
+        return res.status(200).json({ reference, status: 'failed', pesajet_error: txt2 })
       }
+      return res.status(200).json({ reference, status: 'failed', pesajet_error: txt })
     }
 
-    return res.status(200).json({ reference, status: 'failed', error: 'All auth methods 401 - key is wrong or not for payments.pesajet.com' })
+    return res.status(200).json({ reference, status: 'pending', message: `STK sent to ${formatted}`, pesajet_data: txt })
 
   } catch (e: any) {
     console.error(e)
