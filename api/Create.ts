@@ -1,50 +1,87 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+// file: api/payments/create.ts  (must be at ROOT, not inside src)
+import { createClient } from '@supabase/supabase-js';
 
-const MIN = 30000
-const BACKEND_URL = "https://YOUR-VERCEL-APP.vercel.app" // <-- PUT YOUR BACKEND HERE
+export default async function handler(req: any, res: any) {
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed, use POST' });
 
-export default function Recharge(){
- const [amount,setAmount]=useState("")
- const [phone,setPhone]=useState("")
- const [loading,setLoading]=useState(false)
- const navigate = useNavigate()
- const quick = [30000,50000,100000,200000]
-
- const handleRecharge = async () => {
-  const num = Number(amount)
-  if(num < MIN) return alert("Min 30,000 UGX")
-  if(!phone) return alert("Enter phone")
-  setLoading(true)
-  try{
-    const clean = phone.replace('+256','').replace(/\s/g,'')
-    const withoutZero = clean.startsWith('0')? clean.slice(1):clean
-    const provider = (withoutZero.startsWith('75')||withoutZero.startsWith('70'))?'airtel':'mtn'
+  try {
+    const { amount, phone, userId, provider } = req.body || {};
     
-    const res = await fetch(`${BACKEND_URL}/api/payments/create`,{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({amount:num, phone:clean, provider})
-    })
-    const data = await res.json()
-    if(!res.ok) throw new Error(data.message||"Failed")
-    
-    alert(`STK Push sent to ${phone}! Enter PIN.`)
-    navigate("/recharge-status")
-  }catch(e:any){
-    alert("Error: "+e.message)
-  }finally{setLoading(false)}
- }
+    if (!amount || !phone) {
+      return res.status(400).json({ error: 'Missing amount or phone', received: req.body });
+    }
 
- return(
-  <div className="bg-[#0e0e0e] min-h-screen p-4 text-white">
-   <h1 className="text-[#f8e7a0] font-bold text-center">Recharge via PesaJet</h1>
-   <input value={amount} onChange={e=>setAmount(e.target.value)} placeholder="Amount (min 30000)" className="w-full bg-[#1a1a1a] p-3 mt-4 rounded-xl border border-[#d4af37]" />
-   <div className="flex gap-2 mt-2">{quick.map(v=><button key={v} onClick={()=>setAmount(String(v))} className="bg-[#2a2410] text-[#f8e7a0] px-3 py-1 rounded-full text-xs">{v/1000}k</button>)}</div>
-   <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="07XXXXXXXX" className="w-full bg-[#1a1a1a] p-3 mt-4 rounded-xl border border-[#d4af37]" />
-   <button onClick={handleRecharge} disabled={loading} className="w-full mt-5 bg-gradient-to-b from-[#f8e7a0] to-[#d4af37] text-black py-4 rounded-xl font-bold">
-     {loading?"Processing...":"Pay with PesaJet"}
-   </button>
-  </div>
- )
+    // --- Supabase (optional, won't crash if keys missing) ---
+    let supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+    let supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+    
+    if (supabaseUrl && supabaseKey) {
+      try {
+        const supabase = createClient(supabaseUrl, supabaseKey);
+        const reference = `LEGEND-${Date.now()}-${Math.random().toString(36).slice(2,4)}`;
+        
+        // Make sure table 'recharges' exists in Supabase
+        const { error } = await supabase.from('recharges').insert([{
+          reference,
+          user_id: userId || phone,
+          phone,
+          amount: Number(amount),
+          provider: provider || 'mtn',
+          status: 'pending',
+          created_at: new Date().toISOString()
+        }]);
+        
+        if (error) console.log('Supabase insert error (non-fatal):', error.message);
+
+        // Try PesaJet if you have key
+        const pesaKey = process.env.PESAJET_API_KEY;
+        if (pesaKey) {
+          try {
+            // REPLACE THIS URL with your real PesaJet endpoint if different
+            const pjRes = await fetch('https://api.pesajet.com/api/v1/payment/initiate', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${pesaKey}`
+              },
+              body: JSON.stringify({
+                amount: Number(amount),
+                phone: phone.startsWith('0') ? `256${phone.slice(1)}` : phone,
+                reference,
+                provider
+              })
+            });
+            const pjData = await pjRes.json().catch(()=> ({}));
+            return res.status(200).json({ reference, status: 'pending', pesajet_data: pjData });
+          } catch (pjErr: any) {
+            console.log('PesaJet call failed, returning pending anyway:', pjErr.message);
+            return res.status(200).json({ reference, status: 'pending', warning: 'PesaJet call failed' });
+          }
+        }
+
+        // No PesaJet key = return reference anyway so frontend doesn't get empty
+        return res.status(200).json({ reference, status: 'pending', mock: true, message: 'Add PESAJET_API_KEY to enable real STK' });
+
+      } catch (innerErr: any) {
+        console.log('Inner error:', innerErr.message);
+        const reference = `LEGEND-${Date.now()}`;
+        return res.status(200).json({ reference, status: 'pending', warning: innerErr.message });
+      }
+    } else {
+      // No Supabase env = still return reference so frontend never gets empty
+      const reference = `LEGEND-${Date.now()}`;
+      console.log('No Supabase env vars found');
+      return res.status(200).json({ reference, status: 'pending', mock: true });
+    }
+
+  } catch (e: any) {
+    console.error('FATAL API ERROR:', e);
+    // ALWAYS return JSON, never empty
+    return res.status(500).json({ error: e.message || 'Server error', stack: e.stack?.slice(0,500) });
+  }
 }
