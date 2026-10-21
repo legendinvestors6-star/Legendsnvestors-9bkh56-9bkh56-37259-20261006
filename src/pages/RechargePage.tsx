@@ -63,7 +63,7 @@ export default function RechargePage() {
                   className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600"
                 />
               </div>
-              <p className="text-[11px] text-gray-600 mt-1">Minimum UGX 1,000 • Max UGX 1,000,000</p>
+              <p className="text-[11px] text-gray-600 mt-1">Minimum UGX 30000 • Max UGX 1,500,000</p>
             </div>
 
             {/* Provider - SAME style */}
