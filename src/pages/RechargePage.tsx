@@ -3,7 +3,7 @@ import { toast } from 'sonner';
 import { Gift, Phone, Wallet } from 'lucide-react';
 
 export default function RechargePage() {
-  const [amount, setAmount] = useState('50000');
+  const [amount, setAmount] = useState('30000');
   const [phone, setPhone] = useState('');
   const [provider, setProvider] = useState<'mtn' | 'airtel'>('airtel');
   const [status, setStatus] = useState<'idle' | 'loading' | 'stk_sent'>('idle');
