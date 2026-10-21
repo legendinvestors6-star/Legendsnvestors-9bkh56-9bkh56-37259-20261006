@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Eye, EyeOff, Phone, Lock, Gift } from 'lucide-react';
+import { Eye, EyeOff, Phone, Lock, Gift, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { registerUser } from '@/lib/storage';
 import { REGISTRATION_BONUS } from '@/constants/products';
@@ -8,6 +8,7 @@ import { REGISTRATION_BONUS } from '@/constants/products';
 export default function RegisterPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const [fullName, setFullName] = useState(''); // NEW
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -16,14 +17,15 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const handleRegister = () => {
-    if (!phone.trim() || !password.trim() || !confirm.trim()) { toast.error('Please fill in all fields'); return; }
+    if (!fullName.trim() || !phone.trim() || !password.trim() || !confirm.trim()) { toast.error('Please fill in all fields'); return; }
     if (password !== confirm) { toast.error('Passwords do not match'); return; }
     if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
     setLoading(true);
     setTimeout(() => {
-      const result = registerUser(phone.trim(), password, refCode.trim() || undefined);
+      // Pass fullName as 4th param - update your registerUser to save it
+      const result = registerUser(phone.trim(), password, refCode.trim() || undefined, fullName.trim());
       if (result.success && result.user) {
-        toast.success(`Welcome! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
+        toast.success(`Welcome ${fullName}! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
         navigate('/home');
       } else {
         toast.error(result.message);
@@ -63,6 +65,21 @@ export default function RegisterPage() {
       <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
         <h2 className="text-xl font-bold text-white mb-5">Create Account</h2>
         <div className="space-y-4">
+          {/* NEW: Full Name Field */}
+          <div>
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Full Name</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <User size={15} className="text-gray-500 mr-2" />
+              <input
+                type="text"
+                value={fullName}
+                onChange={e => setFullName(e.target.value)}
+                placeholder="e.g. John Doe"
+                className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600"
+              />
+            </div>
+          </div>
+
           {[
             { label: 'Phone Number', value: phone, setter: setPhone, type: 'tel', placeholder: 'e.g. 0751234567', icon: Phone },
             { label: 'Password', value: password, setter: setPassword, type: showPw ? 'text' : 'password', placeholder: 'At least 6 characters', icon: Lock, hasToggle: true },
