@@ -18,7 +18,8 @@ export default function Recharge(){
 
  const startAutoPolling = (reference: string, numAmount: number) => {
    setPolling(true)
-   toast.success("Pending... Enter PIN on phone!")
+   setLoading(true)
+   toast.success("STK sent! Enter PIN on phone")
    let attempts = 0
    const interval = setInterval(async () => {
      attempts++
@@ -30,11 +31,19 @@ export default function Recharge(){
        return
      }
      const { data } = await supabase.from('recharges').select('status').eq('reference', reference).single()
-     if(data?.status === 'completed') {
+     // FIX: Check BOTH success AND completed
+     if(data?.status === 'completed' || data?.status === 'success') {
        clearInterval(interval)
        setPolling(false)
        setLoading(false)
        toast.success(`✅ ${numAmount.toLocaleString()} UGX credited!`)
+       setAmount("")
+     }
+     if(data?.status === 'failed') {
+       clearInterval(interval)
+       setPolling(false)
+       setLoading(false)
+       toast.error("Payment failed")
      }
    }, 3000)
  }
@@ -50,33 +59,40 @@ export default function Recharge(){
     const withoutZero = raw.startsWith('0')? raw.slice(1) : raw;
     const autoProvider = (withoutZero.startsWith('75') || withoutZero.startsWith('70') || withoutZero.startsWith('74'))? 'airtel' : 'mtn';
 
+    // Get real user id
+    const { data: { user } } = await supabase.auth.getUser();
+
     const res = await fetch("/api/payments/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: num, phone: cleanPhone, userId: cleanPhone, provider: autoProvider })
+      body: JSON.stringify({ 
+        amount: num, 
+        phone: cleanPhone, 
+        userId: user?.id || cleanPhone, 
+        provider: autoProvider 
+      })
     });
 
-    // --- FIXED PART START ---
     if(!res.ok) {
       const txt = await res.text();
       let errMsg = `Server error ${res.status}`;
       try { const j = JSON.parse(txt); errMsg = j.error || j.message || errMsg; } catch { if(txt) errMsg = txt.slice(0,300); }
-      // This will now show REAL reason instead of "Empty response"
-      if(res.status === 404) errMsg = "API /api/payments/create not found - Create file api/payments/create.ts at ROOT";
+      if(res.status === 404) errMsg = "API /api/payments/create not found - file must be at api/payments/create.ts";
       throw new Error(errMsg);
     }
     const data = await res.json();
-    // --- FIXED PART END ---
 
     const reference = data.reference
     if(reference) {
       startAutoPolling(reference, num)
     } else {
       toast.success(`STK sent to ${phone}!`)
+      setLoading(false)
     }
   } catch (e: any) {
     toast.error("Error: " + e.message)
     setLoading(false)
+    setPolling(false)
   }
  }
 
@@ -89,7 +105,8 @@ export default function Recharge(){
     </div>
     {polling && (
       <div className="bg-[#f8e7a0]/10 border border-[#f8e7a0] rounded-[20px] p-5 mt-4 text-center animate-pulse">
-        <p className="text-[#f8e7a0] font-bold">⏳ Pending - Check phone for PIN</p>
+        <p className="text-[#f8e7a0] font-bold">⏳ STK sent! Enter PIN on phone</p>
+        <p className="text-[11px] text-gray-400 mt-1">Check {phone} for prompt</p>
       </div>
     )}
     <div className="bg-[#1a1a1a] border border-[#f8e7a0] rounded-[20px] p-5 mt-4">
