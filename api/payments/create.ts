@@ -7,50 +7,77 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') return res.status(200).end()
 
   try {
-    const { amount, phone, provider } = req.body
+    const { amount, phone, userId, provider } = req.body
     let formatted = String(phone||'').replace(/\s/g,'').replace('+','')
     if (formatted.startsWith('0')) formatted = '256' + formatted.slice(1)
+    if (!formatted.startsWith('256')) formatted = '256' + formatted
+
+    // Detect for BOTH
+    const raw = String(phone||'').replace(/\D/g,'').replace(/^256/,'').replace(/^0/,'')
+    const isAirtel = ['75','70','74'].some(p => raw.startsWith(p))
+    const finalProvider = isAirtel ? 'airtel' : 'mtn'
+
+    const supabase = createClient(
+      process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    )
+    const reference = `LGD${Date.now()}${Math.floor(Math.random()*1000)}`
+
+    await supabase.from('recharges').insert([{
+      reference, amount: Number(amount), phone: formatted,
+      user_id: userId, provider: finalProvider, status: 'pending'
+    }])
 
     const key = process.env.PESAJET_PUBLIC_KEY!
-    const reference = `LGD${Date.now()}`
 
-    const urls = [
-      "https://pay.pesajet.com/api/v1/collections",
-      "https://pay.pesajet.com/api/collections",
-      "https://pay.pesajet.com/api/v1/collection",
-      "https://api.pay.pesajet.com/api/v1/collections",
-      "https://merchant.pesajet.com/api/v1/collections",
-      "https://api.pesajet.com/api/collections",
-      "https://pesajet.com/api/v1/collections",
-      "https://api.pesajet.com/api/v2/collections",
-      "https://api.pesajet.com/api/v1/payments",
-      "https://pay.pesajet.com/api/v1/payments",
-      "https://api.pesajet.com/api/v1/payment/request",
-      "https://pesajet.com/api/collections/request",
-    ]
-
-    for (const url of urls) {
-      console.log(`Trying: ${url}`)
-      try {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}`, "Accept": "application/json" },
-          body: JSON.stringify({ amount: Number(amount), phone: formatted, reference, provider, currency: "UGX" })
-        })
-        const txt = await r.text()
-        console.log(`Result ${url} => Status ${r.status} => ${txt.substring(0, 300)}`)
-        if (r.status !== 404) {
-          // Found something that is NOT 404 - this is the real endpoint!
-          return res.status(200).json({ found_url: url, status: r.status, response: txt })
-        }
-      } catch (e: any) {
-        console.log(`Error ${url}: ${e.message}`)
-      }
+    const payload = {
+      amount: Number(amount),
+      phone: formatted,           // 256756
+      reference,
+      provider: finalProvider,    // airtel / mtn
+      currency: "UGX",
+      callback_url: "https://legendsnvestors-9bkh56.vercel.app/api/pesajet/webhook"
     }
 
-    return res.status(200).json({ error: "All URLs 404 - your PesaJet account is NOT on pay.pesajet.com or api.pesajet.com - you need API docs from dashboard" })
+    console.log("PesaJet CORRECT endpoint:", "https://payments.pesajet.com/api/v1/payments", payload)
+
+    const r = await fetch("https://payments.pesajet.com/api/v1/payments", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const txt = await r.text()
+    console.log("PesaJet FINAL response:", txt, "Status:", r.status)
+
+    await supabase.from('recharges').update({ 
+      pesajet_response: txt,
+      pesajet_status_code: r.status
+    }).eq('reference', reference)
+
+    if (!r.ok) {
+      return res.status(200).json({ 
+        reference, 
+        status: 'failed', 
+        pesajet_error: txt,
+        provider_used: finalProvider,
+        phone_used: formatted
+      })
+    }
+
+    return res.status(200).json({ 
+      reference, 
+      status: 'pending', 
+      message: `STK sent to ${formatted} via ${finalProvider}`,
+      pesajet_data: txt
+    })
 
   } catch (e: any) {
+    console.error(e)
     return res.status(500).json({ error: e.message })
   }
 }
