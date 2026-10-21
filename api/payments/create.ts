@@ -25,19 +25,16 @@ export default async function handler(req: any, res: any) {
     const key = process.env.PESAJET_PUBLIC_KEY!
     const url = "https://payments.pesajet.com/api/v1/payments"
 
-    // FIXED payload per error message
+    // FINAL minimal payload - no callbackUrl at all
     const payload = {
       amount: Number(amount),
-      phoneNumber: formatted,        // was 'phone' -> now 'phoneNumber'
+      phoneNumber: formatted,
       reference,
-      provider: provider,           // try 'airtel' / 'mtn' - if fails, try 'AIRTEL_UG' / 'MTN_UG'
-      currency: "UGX",
-      // callback_url removed - it said should not exist
-      // If webhook needed, try callbackUrl or webhook
-      callbackUrl: "https://legendsnvestors-9bkh56.vercel.app/api/pesajet/webhook"
+      provider: provider, // 'airtel' or 'mtn'
+      currency: "UGX"
     }
 
-    console.log("Fixed payload:", payload)
+    console.log("Minimal payload:", payload)
 
     const r = await fetch(url, {
       method: "POST",
@@ -55,24 +52,28 @@ export default async function handler(req: any, res: any) {
     await supabase.from('recharges').update({ pesajet_response: txt }).eq('reference', reference)
 
     if (!r.ok) {
-      // Try alternative provider format if still 400
-      if (txt.includes('provider')) {
-        console.log("Trying AIRTEL_UG format...")
-        const altPayload = { ...payload, provider: provider === 'airtel' ? 'AIRTEL_UG' : 'MTN_UG' }
+      // If provider name wrong, try the other format automatically
+      if (txt.includes('provider') || r.status === 400) {
+        const altProvider = provider === 'airtel' ? 'AIRTEL_UG' : provider === 'mtn' ? 'MTN_UG' : provider
+        const altPayload = { ...payload, provider: altProvider }
+        console.log("Retrying with:", altPayload)
         const r2 = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-api-key": key, "Accept": "application/json" },
           body: JSON.stringify(altPayload)
         })
         const txt2 = await r2.text()
-        console.log(`Alt provider Status ${r2.status} => ${txt2}`)
+        console.log(`Retry Status ${r2.status} => ${txt2}`)
         await supabase.from('recharges').update({ pesajet_response: txt2 }).eq('reference', reference)
-        if (r2.ok) {
-          return res.status(200).json({ reference, status: 'pending', message: `STK sent to ${formatted}`, pesajet_data: txt2 })
-        }
-        return res.status(200).json({ reference, status: 'failed', pesajet_error: txt2 })
+        return res.status(200).json({ 
+          reference, 
+          status: r2.ok ? 'pending' : 'failed', 
+          provider_tried: altProvider,
+          pesajet_response: txt2,
+          status_code: r2.status
+        })
       }
-      return res.status(200).json({ reference, status: 'failed', pesajet_error: txt })
+      return res.status(200).json({ reference, status: 'failed', pesajet_error: txt, status_code: r.status })
     }
 
     return res.status(200).json({ reference, status: 'pending', message: `STK sent to ${formatted}`, pesajet_data: txt })
