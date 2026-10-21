@@ -1,4 +1,4 @@
-// file: api/payments/create.ts  (must be at ROOT, not inside src)
+
 import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(req: any, res: any) {
