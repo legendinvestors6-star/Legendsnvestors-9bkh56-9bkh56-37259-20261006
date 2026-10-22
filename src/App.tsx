@@ -15,9 +15,13 @@ import MinePage from "./pages/MinePage";
 import CheckInPage from "./pages/CheckInPage";
 import TaskCenterPage from "./pages/TaskCenterPage";
 import RechargePage from "./pages/RechargePage";
+import RechargeStatusPage from "./pages/RechargeStatusPage";
 import WithdrawPage from "./pages/WithdrawPage";
+import WithdrawStatusPage from "./pages/WithdrawStatusPage";
 import BindCardPage from "./pages/BindCardPage";
 import RecordsPage from "./pages/RecordsPage";
+import CustomerServicePage from "./pages/CustomerServicePage";
+import EditProfilePage from "./pages/EditProfilePage";
 import AboutPage from "./pages/AboutPage";
 import RegulationPage from "./pages/RegulationPage";
 import AdminPage from "./pages/AdminPage";
@@ -42,9 +46,13 @@ const App = () => (
           <Route path="/checkin" element={<CheckInPage />} />
           <Route path="/tasks" element={<TaskCenterPage />} />
           <Route path="/recharge" element={<RechargePage />} />
+          <Route path="/recharge-status" element={<RechargeStatusPage />} />
           <Route path="/withdraw" element={<WithdrawPage />} />
+          <Route path="/withdraw-status" element={<WithdrawStatusPage />} />
           <Route path="/bind-card" element={<BindCardPage />} />
           <Route path="/records" element={<RecordsPage />} />
+          <Route path="/customer-service" element={<CustomerServicePage />} />
+          <Route path="/edit-profile" element={<EditProfilePage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/regulation" element={<RegulationPage />} />
           <Route path="/redeem" element={<RedeemGiftPage />} />
