@@ -6,12 +6,12 @@ interface Props {
 }
 
 const messages = [
-  '1. Registration Reward: 6,000 UGX',
+  '1. Registration Reward: 9,000 UGX',
   '2. Daily Check-in Reward: 300 UGX',
   '3. Daily return rate of 27%-45%, recover all funds in 2-3 days and continue to profit.',
   '4. Invite others to invest and immediately receive a cash reward equal to 40% of their investment amount.',
   '5. Product earnings are automatically credited to your account every 24 hours and can be withdrawn at any time.',
-  '6. Legend will be launched in Uganda on October 11, 2026.',
+  '6. Legend will be launched in Uganda on November 01, 2026.',
   '7. Join the Telegram group to learn more about making money.',
 ];
 
