@@ -1,8 +1,7 @@
 import { useState, useMemo } from "react";
 import {
   Users, CreditCard, ArrowDownToLine, BarChart3, Check, X, Search,
-  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye, Copy, Plus,
-  UserX, UserCheck, Wallet, UsersRound, CalendarDays, Ban
+  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye, Copy, Plus
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,16 +13,17 @@ import {
   getGiftCodes, createGiftCode, deleteGiftCode,
   getPasswordResets, approvePasswordReset, rejectPasswordReset
 } from "@/lib/storage";
+import type { PasswordResetRequest, GiftCode } from "@/lib/storage";
+import type { User, RechargeOrder, WithdrawOrder, UserProduct } from "@/types";
 
 type AdminTab = "overview" | "users" | "recharge" | "withdraw" | "products" | "gifts" | "resets";
 
 type UserSummary = {
   id: string;
-  name: string;
   phone: string;
   balance: number;
   referralCode: string;
-  referredBy: string;
+  referredBy?: string;
   createdAt: string;
   isAdmin: boolean;
   isBanned: boolean;
@@ -42,9 +42,9 @@ function GiftToolsTab({
   withdrawOrders,
   onRefresh,
 }: {
-  users: any[];
-  rechargeOrders: any[];
-  withdrawOrders: any[];
+  users: User[];
+  rechargeOrders: RechargeOrder[];
+  withdrawOrders: WithdrawOrder[];
   onRefresh: () => void;
 }) {
   const [giftCode, setGiftCode] = useState("");
@@ -55,7 +55,7 @@ function GiftToolsTab({
   const [creditNote, setCreditNote] = useState("");
   const [deductUser, setDeductUser] = useState("");
   const [deductAmount, setDeductAmount] = useState("");
-  const [giftCodes, setGiftCodes] = useState<any[]>(() => getGiftCodes());
+  const [giftCodes, setGiftCodes] = useState<GiftCode[]>(() => getGiftCodes());
 
   const refreshCodes = () => setGiftCodes(getGiftCodes());
 
@@ -130,9 +130,9 @@ function GiftToolsTab({
         <div className="grid grid-cols-2 gap-2">
           {[
             { label: "Total Created", value: giftCodes.length, color: "#c9a84c" },
-            { label: "Total Redeemed", value: giftCodes.filter((c: any) => c.usedBy).length, color: "#22c55e" },
-            { label: "UGX Distributed", value: formatUGX(giftCodes.filter((c: any) => c.usedBy).reduce((s: number, c: any) => s + Number(c.amount || 0), 0)), color: "#f0c040" },
-            { label: "Available / Expired", value: `${giftCodes.filter((c: any) => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter((c: any) => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
+            { label: "Total Redeemed", value: giftCodes.filter(c => c.usedBy).length, color: "#22c55e" },
+            { label: "UGX Distributed", value: formatUGX(giftCodes.filter(c => c.usedBy).reduce((s, c) => s + c.amount, 0)), color: "#f0c040" },
+            { label: "Available / Expired", value: `${giftCodes.filter(c => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter(c => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
           ].map(stat => (
             <div key={stat.label} className="rounded-xl p-3 text-center" style={{ background: "#1e1e1e" }}>
               <p className="font-black text-sm" style={{ color: stat.color }}>{stat.value}</p>
@@ -145,14 +145,14 @@ function GiftToolsTab({
       <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
         <div className="flex items-center justify-between mb-3">
           <p className="text-white font-bold text-sm">Gift Codes ({giftCodes.length})</p>
-          <span className="text-[10px] text-gray-500">{giftCodes.filter((c: any) => !c.usedBy).length} available</span>
+          <span className="text-[10px] text-gray-500">{giftCodes.filter(c => !c.usedBy).length} available</span>
         </div>
 
         {giftCodes.length === 0 ? (
           <p className="text-gray-600 text-xs text-center py-4">No gift codes yet. Create one above.</p>
         ) : (
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {giftCodes.map((gc: any) => (
+            {giftCodes.map(gc => (
               <div
                 key={gc.id}
                 className="rounded-xl p-3 flex items-center justify-between"
@@ -176,10 +176,11 @@ function GiftToolsTab({
                   </div>
 
                   <p className="text-[#c9a84c] text-xs font-bold">{formatUGX(gc.amount)}</p>
+
                   {gc.note && <p className="text-gray-600 text-[10px]">{gc.note}</p>}
 
                   {gc.usedBy ? (() => {
-                    const redeemer = users.find((u: any) => u.id === gc.usedBy);
+                    const redeemer = users.find(u => u.id === gc.usedBy);
                     const redeemedAt = gc.usedAt ? new Date(gc.usedAt) : null;
                     return (
                       <div className="mt-1 rounded-lg p-1.5" style={{ background: "rgba(34,197,94,0.08)" }}>
@@ -236,7 +237,7 @@ function GiftToolsTab({
       <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
         <div className="flex items-center gap-2 mb-3">
           <DollarSign size={16} className="text-[#c9a84c]" />
-          <p className="text-white font-bold text-sm">Credit Balance to User</p>
+          <p className="text-white font-bold text-sm">Credit Balance</p>
         </div>
 
         <div className="space-y-2">
@@ -247,7 +248,7 @@ function GiftToolsTab({
             style={{ background: "#1e1e1e", border: "1px solid #333" }}
           >
             <option value="">Select user...</option>
-            {users.map((u: any) => (
+            {users.map(u => (
               <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
             ))}
           </select>
@@ -276,17 +277,17 @@ function GiftToolsTab({
               if (!creditUser) { toast.error("Select a user"); return; }
               if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
 
-              const usr = getUsers().find((u: any) => u.id === creditUser);
+              const usr = getUsers().find(u => u.id === creditUser) as any;
               if (!usr) return;
 
-              updateUser(creditUser, { balance: usr.balance + amt, cumulativeIncome: usr.cumulativeIncome + amt });
+              updateUser(creditUser, { balance: usr.balance + amt, cumulativeIncome: usr.cumulativeIncome + amt } as any);
               addTransaction({
                 userId: creditUser,
                 type: "income",
                 amount: amt,
                 status: "completed",
                 description: creditNote || "Admin credit"
-              });
+              } as any);
 
               toast.success(`Credited ${formatUGX(amt)} to ${usr.phone}`);
               setCreditUser("");
@@ -315,7 +316,7 @@ function GiftToolsTab({
             style={{ background: "#1e1e1e", border: "1px solid #333" }}
           >
             <option value="">Select user...</option>
-            {users.map((u: any) => (
+            {users.map(u => (
               <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
             ))}
           </select>
@@ -335,18 +336,18 @@ function GiftToolsTab({
               if (!deductUser) { toast.error("Select a user"); return; }
               if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
 
-              const usr = getUsers().find((u: any) => u.id === deductUser);
+              const usr = getUsers().find(u => u.id === deductUser) as any;
               if (!usr) return;
               if (amt > usr.balance) { toast.error("Amount exceeds user balance"); return; }
 
-              updateUser(deductUser, { balance: usr.balance - amt });
+              updateUser(deductUser, { balance: usr.balance - amt } as any);
               addTransaction({
                 userId: deductUser,
                 type: "withdraw",
                 amount: -amt,
                 status: "completed",
                 description: "Admin deduction"
-              });
+              } as any);
 
               toast.success(`Deducted ${formatUGX(amt)} from ${usr.phone}`);
               setDeductUser("");
@@ -360,57 +361,6 @@ function GiftToolsTab({
           </button>
         </div>
       </div>
-
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <Bell size={16} className="text-yellow-400" />
-          <p className="text-white font-bold text-sm">Platform Stats</p>
-        </div>
-
-        <div className="space-y-2">
-          {[
-            { label: "Total Users", value: users.length },
-            { label: "Total Recharge Orders", value: rechargeOrders.length },
-            { label: "Total Withdraw Orders", value: withdrawOrders.length },
-            { label: "Completed Recharges", value: formatUGX(rechargeOrders.filter((o: any) => o.status === "completed").reduce((s: number, o: any) => s + Number(o.amount || 0), 0)) },
-            { label: "Pending Withdrawals", value: formatUGX(withdrawOrders.filter((o: any) => o.status === "pending").reduce((s: number, o: any) => s + Number(o.amount || 0), 0)) },
-            { label: "Total Platform Balances", value: formatUGX(users.reduce((s: number, u: any) => s + Number(u.balance || 0), 0)) },
-            { label: "Active Gift Codes", value: getGiftCodes().filter((c: any) => !c.usedBy).length },
-          ].map(stat => (
-            <div key={stat.label} className="flex justify-between items-center py-2" style={{ borderBottom: "1px solid #222" }}>
-              <span className="text-gray-500 text-xs">{stat.label}</span>
-              <span className="text-white font-bold text-sm">{stat.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <Eye size={16} className="text-blue-400" />
-          <p className="text-white font-bold text-sm">View User Transactions</p>
-        </div>
-
-        <select
-          onChange={e => {
-            const uid = e.target.value;
-            if (!uid) return;
-
-            const txs = getTransactions(uid);
-            const usr = getUsers().find((u: any) => u.id === uid);
-
-            alert(
-              `${usr?.phone} — ${txs.length} transactions\n\n` +
-              txs.slice(0, 10).map((t: any) => `${t.type.toUpperCase()}: ${t.amount >= 0 ? "+" : ""}${t.amount} UGX — ${t.description} (${t.status})`).join("\n")
-            );
-          }}
-          className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
-          style={{ background: "#1e1e1e", border: "1px solid #333" }}
-        >
-          <option value="">Select user to view transactions...</option>
-          {users.map((u: any) => <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>)}
-        </select>
-      </div>
     </div>
   );
 }
@@ -421,10 +371,10 @@ export default function AdminPage() {
   const [searchQ, setSearchQ] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const users = useMemo(() => {
+  const users = useMemo<UserSummary[]>(() => {
     const allUsers = getUsers() || [];
     const normalized = allUsers
-      .filter((u: any) => !u.isAdmin && !u.is_admin && !u.isadmin)
+      .filter((u: any) => !(u.isAdmin || u.is_admin || u.isadmin))
       .map((u: any) => {
         const referralCode = u.referralCode || u.referral_code || u.referral || "";
         const referredBy = u.referredBy || u.referred_by || u.referrer || "";
@@ -435,7 +385,9 @@ export default function AdminPage() {
         });
 
         const txs = getTransactions(u.id) || [];
-        const totalEarned = txs.filter((t: any) => t.type === "income" || Number(t.amount || 0) > 0).reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+        const totalEarned = txs
+          .filter((t: any) => (t.type === "income" || Number(t.amount || 0) > 0))
+          .reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
 
         const userProducts = getUserProducts(u.id) || [];
         const userWithdrawals = getWithdrawOrders(u.id) || [];
@@ -443,8 +395,7 @@ export default function AdminPage() {
 
         return {
           id: u.id,
-          name: u.name || u.full_name || u.first_name || "Unknown",
-          phone: u.phone || "",
+          phone: u.phone,
           balance: Number(u.balance || 0),
           referralCode,
           referredBy,
@@ -453,8 +404,12 @@ export default function AdminPage() {
           isBanned: !!(u.isBanned || u.is_banned || u.banned || u.status === "banned"),
           isDeleted: !!(u.isDeleted || u.is_deleted || u.deleted || u.deleted_at),
           totalEarned,
-          totalWithdrawn: userWithdrawals.filter((w: any) => w.status === "completed").reduce((s: number, w: any) => s + Number(w.amount || 0), 0),
-          totalDeposited: userRecharges.filter((r: any) => r.status === "completed").reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
+          totalWithdrawn: userWithdrawals
+            .filter((w: any) => w.status === "completed")
+            .reduce((s: number, w: any) => s + Number(w.amount || 0), 0),
+          totalDeposited: userRecharges
+            .filter((r: any) => r.status === "completed")
+            .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
           activePackages: userProducts.filter((p: any) => p.status === "active").length,
           totalPackages: userProducts.length,
           teamMembers
@@ -477,7 +432,7 @@ export default function AdminPage() {
   const totalRecharge = rechargeOrders.filter((o: any) => o.status === "completed").reduce((s: number, o: any) => s + Number(o.amount || 0), 0);
 
   const filteredUsers = users.filter((u: UserSummary) =>
-    `${u.phone} ${u.name} ${u.referralCode}`.toLowerCase().includes(searchQ.toLowerCase())
+    `${u.phone} ${u.referralCode} ${u.referredBy || ""}`.toLowerCase().includes(searchQ.toLowerCase())
   );
 
   const handleApproveRecharge = (orderId: string) => {
@@ -507,13 +462,14 @@ export default function AdminPage() {
   const handleAdjustBalance = (user: UserSummary) => {
     const val = window.prompt(`Set new balance for ${user.phone} (current: ${formatUGX(user.balance)})`, String(user.balance));
     if (val === null) return;
+
     const newValue = Number(val);
     if (Number.isNaN(newValue)) {
       toast.error("Invalid balance");
       return;
     }
 
-    updateUser(user.id, { balance: newValue });
+    updateUser(user.id, { balance: newValue } as any);
     toast.success(`Balance updated for ${user.phone}`);
     setRefreshKey(v => v + 1);
   };
@@ -525,7 +481,7 @@ export default function AdminPage() {
       isBanned: nextStatus,
       banned: nextStatus,
       status: nextStatus ? "banned" : "active"
-    });
+    } as any);
     toast.success(nextStatus ? `User ${user.phone} banned` : `User ${user.phone} unbanned`);
     setRefreshKey(v => v + 1);
   };
@@ -539,7 +495,7 @@ export default function AdminPage() {
       isDeleted: true,
       deleted: true,
       deleted_at: new Date().toISOString()
-    });
+    } as any);
 
     toast.success(`User ${user.phone} marked as deleted`);
     setRefreshKey(v => v + 1);
@@ -552,7 +508,7 @@ export default function AdminPage() {
     { key: "withdraw", label: "Withdraw", icon: ArrowDownToLine, badge: pendingWithdraw.length },
     { key: "products", label: "Products", icon: TrendingUp },
     { key: "resets", label: "Resets", icon: Shield, badge: pendingResets.length },
-    { key: "gifts", label: "Tools", icon: Gift }
+    { key: "gifts", label: "Tools", icon: Gift },
   ];
 
   const getStatusStyle = (status: string) => {
@@ -660,10 +616,9 @@ export default function AdminPage() {
                 <div key={user.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1 min-w-0">
-                      <p className="text-white font-bold text-sm">{user.name || "Unnamed User"}</p>
-                      <p className="text-white text-xs">{user.phone}</p>
+                      <p className="text-white font-bold text-sm">{user.phone}</p>
                       <p className="text-gray-500 text-[10px] mt-1">
-                        Joined: {user.createdAt ? new Date(user.createdAt).toLocaleString() : "Unknown"} 
+                        Joined: {user.createdAt ? new Date(user.createdAt).toLocaleString() : "Unknown"}
                       </p>
                     </div>
 
@@ -721,26 +676,17 @@ export default function AdminPage() {
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <button
-                      onClick={() => handleAdjustBalance(user)}
-                      className="py-2 rounded-xl text-[10px] font-semibold text-black gold-gradient"
-                    >
+                    <button onClick={() => handleAdjustBalance(user)} className="py-2 rounded-xl text-[10px] font-semibold text-black gold-gradient">
                       Adjust
                     </button>
 
-                    <button
-                      onClick={() => handleBanUser(user)}
-                      className="py-2 rounded-xl text-[10px] font-semibold text-white"
-                      style={{ background: user.isBanned ? "#1c1c1c" : "rgba(239,68,68,0.16)", border: "1px solid rgba(239,68,68,0.2)" }}
-                    >
+                    <button onClick={() => handleBanUser(user)} className="py-2 rounded-xl text-[10px] font-semibold text-white"
+                      style={{ background: user.isBanned ? "#1c1c1c" : "rgba(239,68,68,0.16)", border: "1px solid rgba(239,68,68,0.2)" }}>
                       {user.isBanned ? "Unban" : "Ban"}
                     </button>
 
-                    <button
-                      onClick={() => handleDeleteUser(user)}
-                      className="py-2 rounded-xl text-[10px] font-semibold text-red-300"
-                      style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}
-                    >
+                    <button onClick={() => handleDeleteUser(user)} className="py-2 rounded-xl text-[10px] font-semibold text-red-300"
+                      style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}>
                       Delete
                     </button>
                   </div>
@@ -778,6 +724,7 @@ export default function AdminPage() {
             ) : (
               rechargeOrders.map((order: any) => {
                 const user = users.find((u: UserSummary) => u.id === order.userId);
+
                 return (
                   <div key={order.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                     <div className="flex justify-between items-start mb-3">
@@ -803,6 +750,7 @@ export default function AdminPage() {
                             <span className="text-gray-500">Sender Number</span>
                             <span className="text-white font-semibold">+256 {order.phoneNumber || "—"}</span>
                           </div>
+
                           {order.paymentMethod === "MTN" ? (
                             <>
                               <div className="flex justify-between text-xs">
@@ -953,7 +901,7 @@ export default function AdminPage() {
                 <p className="text-gray-600 text-sm">No password reset requests</p>
               </div>
             ) : (
-              passwordResets.map((req: any) => (
+              passwordResets.map((req: PasswordResetRequest) => (
                 <div
                   key={req.id}
                   className="rounded-2xl p-4"
@@ -1024,9 +972,9 @@ export default function AdminPage() {
 
         {tab === "gifts" && (
           <GiftToolsTab
-            users={users}
-            rechargeOrders={rechargeOrders}
-            withdrawOrders={withdrawOrders}
+            users={users as any}
+            rechargeOrders={rechargeOrders as any}
+            withdrawOrders={withdrawOrders as any}
             onRefresh={() => setRefreshKey(v => v + 1)}
           />
         )}
