@@ -21,7 +21,7 @@ import WithdrawStatusPage from "./pages/WithdrawStatusPage";
 import BindCardPage from "./pages/BindCardPage";
 import RecordsPage from "./pages/RecordsPage";
 import CustomerServicePage from "./pages/CustomerServicePage";
-import editprofilepage from "./pages/editprofilepage";
+import Editprofilepage from "./pages/editprofilepage";
 import AboutPage from "./pages/AboutPage";
 import RegulationPage from "./pages/RegulationPage";
 import AdminPage from "./pages/AdminPage";
