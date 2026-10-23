@@ -1,7 +1,9 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Users, CreditCard, ArrowDownToLine, BarChart3, Check, X, Search,
-  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye, Copy, Plus
+  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye,
+  Copy, Plus, Filter, Download, ArrowUpDown, UserCog, RefreshCw,
+  Wallet, UserCheck, UserX, FileText, Percent, Layers3
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -13,14 +15,21 @@ import {
   getGiftCodes, createGiftCode, deleteGiftCode,
   getPasswordResets, approvePasswordReset, rejectPasswordReset
 } from "@/lib/storage";
-import type { PasswordResetRequest, GiftCode } from "@/lib/storage";
 import type { User, RechargeOrder, WithdrawOrder, UserProduct } from "@/types";
 
-type AdminTab = "overview" | "users" | "recharge" | "withdraw" | "products" | "gifts" | "resets";
+type AdminTab =
+  | "overview"
+  | "users"
+  | "recharge"
+  | "withdraw"
+  | "products"
+  | "gifts"
+  | "resets";
 
 type UserSummary = {
   id: string;
   phone: string;
+  fullName?: string;
   balance: number;
   referralCode: string;
   referredBy?: string;
@@ -34,13 +43,17 @@ type UserSummary = {
   activePackages: number;
   totalPackages: number;
   teamMembers: any[];
+  teamSize: number;
+  level: number;
 };
+
+type SortKey = "phone" | "balance" | "createdAt" | "referralCode" | "teamSize";
 
 function GiftToolsTab({
   users,
   rechargeOrders,
   withdrawOrders,
-  onRefresh,
+  onRefresh
 }: {
   users: User[];
   rechargeOrders: RechargeOrder[];
@@ -55,90 +68,222 @@ function GiftToolsTab({
   const [creditNote, setCreditNote] = useState("");
   const [deductUser, setDeductUser] = useState("");
   const [deductAmount, setDeductAmount] = useState("");
-  const [giftCodes, setGiftCodes] = useState<GiftCode[]>(() => getGiftCodes());
+  const [giftCodes, setGiftCodes] = useState<any[]>(() => getGiftCodes());
 
   const refreshCodes = () => setGiftCodes(getGiftCodes());
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.3)" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <Gift size={16} className="text-[#c9a84c]" />
-          <p className="text-white font-bold text-sm">Create Gift Code</p>
-        </div>
-
-        <div className="space-y-2">
-          <input
-            value={giftCode}
-            onChange={e => setGiftCode(e.target.value.toUpperCase())}
-            placeholder="Custom code (optional)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none uppercase tracking-widest"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <input
-            value={giftAmount}
-            onChange={e => setGiftAmount(e.target.value)}
-            type="number"
-            placeholder="Amount (UGX)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <input
-            value={giftNote}
-            onChange={e => setGiftNote(e.target.value)}
-            placeholder="Note (optional)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.2)" }}>
-            <span className="text-yellow-400 text-xs">⏱</span>
-            <span className="text-yellow-300 text-xs font-medium">Code expires automatically 30 minutes after creation</span>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.3)" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <Gift size={16} className="text-[#c9a84c]" />
+            <p className="text-white font-bold text-sm">Create Gift Code</p>
           </div>
 
-          <button
-            onClick={() => {
-              const amt = Number(giftAmount);
-              if (!giftCode && !giftAmount) {
-                toast.error("Enter a valid amount");
-                return;
-              }
-              if (amt <= 0 || Number.isNaN(amt)) {
-                toast.error("Enter a valid amount");
-                return;
-              }
+          <div className="space-y-2">
+            <input
+              value={giftCode}
+              onChange={e => setGiftCode(e.target.value.toUpperCase())}
+              placeholder="Custom code (optional)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none uppercase tracking-widest"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
 
-              const created = createGiftCode(amt, giftNote || undefined, giftCode || undefined);
-              toast.success(`Gift code created: ${created.code}`);
-              setGiftCode("");
-              setGiftAmount("");
-              setGiftNote("");
-              refreshCodes();
-              onRefresh();
-            }}
-            className="w-full py-3 rounded-xl font-bold text-black text-sm gold-gradient flex items-center justify-center gap-2"
-          >
-            <Plus size={15} /> Generate Gift Code
-          </button>
+            <input
+              value={giftAmount}
+              onChange={e => setGiftAmount(e.target.value)}
+              type="number"
+              placeholder="Amount (UGX)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
+
+            <input
+              value={giftNote}
+              onChange={e => setGiftNote(e.target.value)}
+              placeholder="Note (optional)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
+
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.2)" }}>
+              <span className="text-yellow-400 text-xs">⏱</span>
+              <span className="text-yellow-300 text-xs font-medium">Code expires automatically 30 minutes after creation</span>
+            </div>
+
+            <button
+              onClick={() => {
+                const amt = Number(giftAmount);
+                if (!giftCode && !giftAmount) {
+                  toast.error("Enter a valid amount");
+                  return;
+                }
+                if (amt <= 0 || Number.isNaN(amt)) {
+                  toast.error("Enter a valid amount");
+                  return;
+                }
+
+                const created = createGiftCode(amt, giftNote || undefined, giftCode || undefined);
+                toast.success(`Gift code created: ${created.code}`);
+                setGiftCode("");
+                setGiftAmount("");
+                setGiftNote("");
+                refreshCodes();
+                onRefresh();
+              }}
+              className="w-full py-3 rounded-xl font-bold text-black text-sm gold-gradient flex items-center justify-center gap-2"
+            >
+              <Plus size={15} /> Generate Gift Code
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.25)" }}>
+          <p className="text-white font-bold text-sm mb-3">Gift Code Summary</p>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { label: "Total Created", value: giftCodes.length, color: "#c9a84c" },
+              { label: "Total Redeemed", value: giftCodes.filter(c => c.usedBy).length, color: "#22c55e" },
+              { label: "UGX Distributed", value: formatUGX(giftCodes.filter(c => c.usedBy).reduce((s, c) => s + Number(c.amount || 0), 0)), color: "#f0c040" },
+              { label: "Available / Expired", value: `${giftCodes.filter(c => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter(c => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
+            ].map(stat => (
+              <div key={stat.label} className="rounded-xl p-3 text-center" style={{ background: "#1e1e1e" }}>
+                <p className="font-black text-sm" style={{ color: stat.color }}>{stat.value}</p>
+                <p className="text-gray-600 text-[10px] mt-0.5">{stat.label}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.25)" }}>
-        <p className="text-white font-bold text-sm mb-3">Gift Code Summary</p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: "Total Created", value: giftCodes.length, color: "#c9a84c" },
-            { label: "Total Redeemed", value: giftCodes.filter(c => c.usedBy).length, color: "#22c55e" },
-            { label: "UGX Distributed", value: formatUGX(giftCodes.filter(c => c.usedBy).reduce((s, c) => s + c.amount, 0)), color: "#f0c040" },
-            { label: "Available / Expired", value: `${giftCodes.filter(c => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter(c => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
-          ].map(stat => (
-            <div key={stat.label} className="rounded-xl p-3 text-center" style={{ background: "#1e1e1e" }}>
-              <p className="font-black text-sm" style={{ color: stat.color }}>{stat.value}</p>
-              <p className="text-gray-600 text-[10px] mt-0.5">{stat.label}</p>
-            </div>
-          ))}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <DollarSign size={16} className="text-[#c9a84c]" />
+            <p className="text-white font-bold text-sm">Credit Balance</p>
+          </div>
+
+          <div className="space-y-2">
+            <select
+              value={creditUser}
+              onChange={e => setCreditUser(e.target.value)}
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            >
+              <option value="">Select user...</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
+              ))}
+            </select>
+
+            <input
+              value={creditAmount}
+              onChange={e => setCreditAmount(e.target.value)}
+              type="number"
+              placeholder="Amount (UGX)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
+
+            <input
+              value={creditNote}
+              onChange={e => setCreditNote(e.target.value)}
+              type="text"
+              placeholder="Note (optional)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
+
+            <button
+              onClick={() => {
+                const amt = Number(creditAmount);
+                if (!creditUser) { toast.error("Select a user"); return; }
+                if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
+
+                const usr = getUsers().find(u => u.id === creditUser) as User | undefined;
+                if (!usr) return;
+
+                updateUser(creditUser, { balance: usr.balance + amt, cumulativeIncome: usr.cumulativeIncome + amt } as any);
+                addTransaction({
+                  userId: creditUser,
+                  type: "income",
+                  amount: amt,
+                  status: "completed",
+                  description: creditNote || "Admin credit"
+                } as any);
+
+                toast.success(`Credited ${formatUGX(amt)} to ${usr.phone}`);
+                setCreditUser("");
+                setCreditAmount("");
+                setCreditNote("");
+                onRefresh();
+              }}
+              className="w-full py-3 rounded-xl font-bold text-black text-sm gold-gradient"
+            >
+              Credit Balance
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <Trash2 size={16} className="text-red-400" />
+            <p className="text-white font-bold text-sm">Deduct Balance</p>
+          </div>
+
+          <div className="space-y-2">
+            <select
+              value={deductUser}
+              onChange={e => setDeductUser(e.target.value)}
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            >
+              <option value="">Select user...</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
+              ))}
+            </select>
+
+            <input
+              value={deductAmount}
+              onChange={e => setDeductAmount(e.target.value)}
+              type="number"
+              placeholder="Amount to deduct (UGX)"
+              className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
+              style={{ background: "#1e1e1e", border: "1px solid #333" }}
+            />
+
+            <button
+              onClick={() => {
+                const amt = Number(deductAmount);
+                if (!deductUser) { toast.error("Select a user"); return; }
+                if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
+
+                const usr = getUsers().find(u => u.id === deductUser) as User | undefined;
+                if (!usr) return;
+                if (amt > usr.balance) { toast.error("Amount exceeds user balance"); return; }
+
+                updateUser(deductUser, { balance: usr.balance - amt } as any);
+                addTransaction({
+                  userId: deductUser,
+                  type: "withdraw",
+                  amount: -amt,
+                  status: "completed",
+                  description: "Admin deduction"
+                } as any);
+
+                toast.success(`Deducted ${formatUGX(amt)} from ${usr.phone}`);
+                setDeductUser("");
+                setDeductAmount("");
+                onRefresh();
+              }}
+              className="w-full py-3 rounded-xl font-bold text-red-400 text-sm"
+              style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}
+            >
+              Deduct Balance
+            </button>
+          </div>
         </div>
       </div>
 
@@ -176,189 +321,126 @@ function GiftToolsTab({
                   </div>
 
                   <p className="text-[#c9a84c] text-xs font-bold">{formatUGX(gc.amount)}</p>
-
                   {gc.note && <p className="text-gray-600 text-[10px]">{gc.note}</p>}
 
-                  {gc.usedBy ? (() => {
-                    const redeemer = users.find(u => u.id === gc.usedBy);
-                    const redeemedAt = gc.usedAt ? new Date(gc.usedAt) : null;
-                    return (
-                      <div className="mt-1 rounded-lg p-1.5" style={{ background: "rgba(34,197,94,0.08)" }}>
-                        <p className="text-green-400 text-[10px] font-semibold">✓ Redeemed by: {redeemer?.phone || gc.usedBy}</p>
-                        {redeemedAt && (
-                          <p className="text-green-600 text-[9px]">{redeemedAt.toLocaleDateString()} at {redeemedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
-                        )}
-                      </div>
-                    );
-                  })() : gc.expiresAt && new Date(gc.expiresAt) < new Date() ? (
-                    <p className="text-red-400 text-[10px]">Expired · {new Date(gc.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
-                  ) : gc.expiresAt ? (() => {
-                    const msLeft = new Date(gc.expiresAt).getTime() - Date.now();
-                    const minLeft = Math.max(0, Math.floor(msLeft / 60000));
-                    const secLeft = Math.max(0, Math.floor((msLeft % 60000) / 1000));
-                    return <p className="text-yellow-400 text-[10px]">⏱ Expires in {minLeft}m {secLeft}s</p>;
-                  })() : (
-                    <p className="text-gray-600 text-[10px]">No expiry · {new Date(gc.createdAt).toLocaleDateString()}</p>
+                  {gc.usedBy ? (
+                    <div className="mt-1 rounded-lg p-1.5" style={{ background: "rgba(34,197,94,0.08)" }}>
+                      <p className="text-green-400 text-[10px] font-semibold">✓ Redeemed by: {users.find(u => u.id === gc.usedBy)?.phone || gc.usedBy}</p>
+                    </div>
+                  ) : gc.expiresAt && new Date(gc.expiresAt) < new Date() ? (
+                    <p className="text-red-400 text-[10px]">Expired</p>
+                  ) : gc.expiresAt ? (
+                    <p className="text-yellow-400 text-[10px]">Active until {new Date(gc.expiresAt).toLocaleString()}</p>
+                  ) : (
+                    <p className="text-gray-600 text-[10px]">No expiry</p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 ml-2">
-                  <span
-                    className="text-[9px] px-1.5 py-0.5 rounded-full font-bold"
-                    style={
-                      gc.usedBy
-                        ? { background: "rgba(34,197,94,0.1)", color: "#22c55e" }
-                        : gc.expiresAt && new Date(gc.expiresAt) < new Date()
-                          ? { background: "rgba(239,68,68,0.1)", color: "#ef4444" }
-                          : { background: "rgba(201,168,76,0.1)", color: "#c9a84c" }
-                    }
-                  >
-                    {gc.usedBy ? "USED" : gc.expiresAt && new Date(gc.expiresAt) < new Date() ? "EXPIRED" : "ACTIVE"}
-                  </span>
-
-                  <button
-                    onClick={() => {
-                      deleteGiftCode(gc.id);
-                      refreshCodes();
-                      toast.success("Deleted");
-                    }}
-                    className="w-6 h-6 rounded flex items-center justify-center"
-                    style={{ background: "rgba(239,68,68,0.1)" }}
-                  >
-                    <Trash2 size={11} className="text-red-400" />
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    deleteGiftCode(gc.id);
+                    refreshCodes();
+                    toast.success("Gift code deleted");
+                  }}
+                  className="w-7 h-7 rounded flex items-center justify-center"
+                  style={{ background: "rgba(239,68,68,0.12)" }}
+                >
+                  <Trash2 size={12} className="text-red-400" />
+                </button>
               </div>
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <DollarSign size={16} className="text-[#c9a84c]" />
-          <p className="text-white font-bold text-sm">Credit Balance</p>
-        </div>
+function UserDetailModal({
+  user,
+  onClose
+}: {
+  user: UserSummary | null;
+  onClose: () => void;
+}) {
+  if (!user) return null;
 
-        <div className="space-y-2">
-          <select
-            value={creditUser}
-            onChange={e => setCreditUser(e.target.value)}
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          >
-            <option value="">Select user...</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
-            ))}
-          </select>
+  const allTx = getTransactions(user.id);
+  const dept = user.teamMembers || [];
 
-          <input
-            value={creditAmount}
-            onChange={e => setCreditAmount(e.target.value)}
-            type="number"
-            placeholder="Amount (UGX)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <input
-            value={creditNote}
-            onChange={e => setCreditNote(e.target.value)}
-            type="text"
-            placeholder="Note (optional)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <button
-            onClick={() => {
-              const amt = Number(creditAmount);
-              if (!creditUser) { toast.error("Select a user"); return; }
-              if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
-
-              const usr = getUsers().find(u => u.id === creditUser) as any;
-              if (!usr) return;
-
-              updateUser(creditUser, { balance: usr.balance + amt, cumulativeIncome: usr.cumulativeIncome + amt } as any);
-              addTransaction({
-                userId: creditUser,
-                type: "income",
-                amount: amt,
-                status: "completed",
-                description: creditNote || "Admin credit"
-              } as any);
-
-              toast.success(`Credited ${formatUGX(amt)} to ${usr.phone}`);
-              setCreditUser("");
-              setCreditAmount("");
-              setCreditNote("");
-              onRefresh();
-            }}
-            className="w-full py-3 rounded-xl font-bold text-black text-sm gold-gradient"
-          >
-            Credit Balance
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl border border-[#2a2a2a] bg-[#111111] p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-white font-black text-xl">{user.fullName || user.phone}</p>
+            <p className="text-gray-500 text-xs">{user.phone}</p>
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-xl bg-[#1d1d1d] text-gray-300 flex items-center justify-center">
+            <X size={16} />
           </button>
         </div>
-      </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-        <div className="flex items-center gap-2 mb-3">
-          <Trash2 size={16} className="text-red-400" />
-          <p className="text-white font-bold text-sm">Deduct Balance</p>
+        <div className="grid gap-3 md:grid-cols-4">
+          <div className="rounded-xl p-3" style={{ background: "#171717", border: "1px solid #2a2a2a" }}>
+            <p className="text-gray-500 text-[10px]">Balance</p>
+            <p className="text-[#c9a84c] font-black text-lg">{formatUGX(user.balance)}</p>
+          </div>
+          <div className="rounded-xl p-3" style={{ background: "#171717", border: "1px solid #2a2a2a" }}>
+            <p className="text-gray-500 text-[10px]">Referral Code</p>
+            <p className="text-white font-bold text-lg">{user.referralCode}</p>
+          </div>
+          <div className="rounded-xl p-3" style={{ background: "#171717", border: "1px solid #2a2a2a" }}>
+            <p className="text-gray-500 text-[10px]">Created</p>
+            <p className="text-white font-bold text-sm">{new Date(user.createdAt).toLocaleDateString()}</p>
+          </div>
+          <div className="rounded-xl p-3" style={{ background: "#171717", border: "1px solid #2a2a2a" }}>
+            <p className="text-gray-500 text-[10px]">Team Size</p>
+            <p className="text-white font-bold text-lg">{user.teamSize}</p>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <select
-            value={deductUser}
-            onChange={e => setDeductUser(e.target.value)}
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          >
-            <option value="">Select user...</option>
-            {users.map(u => (
-              <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
-            ))}
-          </select>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+            <p className="text-white font-bold text-sm mb-3">Transaction History</p>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {allTx.length === 0 ? (
+                <p className="text-gray-600 text-xs">No transactions yet.</p>
+              ) : (
+                allTx.map(tx => (
+                  <div key={tx.id} className="rounded-xl p-2.5" style={{ background: "#1d1d1d", border: "1px solid #2a2a2a" }}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white text-xs font-semibold uppercase">{tx.type}</span>
+                      <span className={tx.amount >= 0 ? "text-green-400 text-xs font-bold" : "text-red-400 text-xs font-bold"}>
+                        {tx.amount >= 0 ? "+" : "-"}{formatUGX(Math.abs(tx.amount))}
+                      </span>
+                    </div>
+                    <p className="text-gray-500 text-[10px] mt-1">{tx.description}</p>
+                    <p className="text-gray-600 text-[10px] mt-1">{new Date(tx.createdAt).toLocaleString()}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
 
-          <input
-            value={deductAmount}
-            onChange={e => setDeductAmount(e.target.value)}
-            type="number"
-            placeholder="Amount to deduct (UGX)"
-            className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none bg-transparent"
-            style={{ background: "#1e1e1e", border: "1px solid #333" }}
-          />
-
-          <button
-            onClick={() => {
-              const amt = Number(deductAmount);
-              if (!deductUser) { toast.error("Select a user"); return; }
-              if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
-
-              const usr = getUsers().find(u => u.id === deductUser) as any;
-              if (!usr) return;
-              if (amt > usr.balance) { toast.error("Amount exceeds user balance"); return; }
-
-              updateUser(deductUser, { balance: usr.balance - amt } as any);
-              addTransaction({
-                userId: deductUser,
-                type: "withdraw",
-                amount: -amt,
-                status: "completed",
-                description: "Admin deduction"
-              } as any);
-
-              toast.success(`Deducted ${formatUGX(amt)} from ${usr.phone}`);
-              setDeductUser("");
-              setDeductAmount("");
-              onRefresh();
-            }}
-            className="w-full py-3 rounded-xl font-bold text-red-400 text-sm"
-            style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}
-          >
-            Deduct Balance
-          </button>
+          <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+            <p className="text-white font-bold text-sm mb-3">Team Members</p>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {dept.length === 0 ? (
+                <p className="text-gray-600 text-xs">No team members found.</p>
+              ) : (
+                dept.map((m: any) => (
+                  <div key={m.id} className="rounded-xl p-2.5" style={{ background: "#1d1d1d", border: "1px solid #2a2a2a" }}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-white text-xs">{m.phone || "Unknown"}</span>
+                      <span className="text-[#c9a84c] text-[10px]">{formatUGX(Number(m.balance || 0))}</span>
+                    </div>
+                    <p className="text-gray-500 text-[10px]">{m.referralCode || "No code"}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -369,54 +451,56 @@ export default function AdminPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<AdminTab>("overview");
   const [searchQ, setSearchQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "banned" | "deleted">("all");
+  const [sortKey, setSortKey] = useState<SortKey>("createdAt");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedUser, setSelectedUser] = useState<UserSummary | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const users = useMemo<UserSummary[]>(() => {
     const allUsers = getUsers() || [];
-    const normalized = allUsers
-      .filter((u: any) => !(u.isAdmin || u.is_admin || u.isadmin))
-      .map((u: any) => {
-        const referralCode = u.referralCode || u.referral_code || u.referral || "";
-        const referredBy = u.referredBy || u.referred_by || u.referrer || "";
-        const teamMembers = allUsers.filter((x: any) => {
-          const xReferral = x.referralCode || x.referral_code || x.referral || "";
-          const xReferredBy = x.referredBy || x.referred_by || x.referrer || "";
-          return xReferral === referralCode || xReferredBy === referralCode || x.referred_by === referralCode || x.referredBy === referralCode;
-        });
+    const rawUsers = allUsers.filter((u: any) => !(u.isAdmin || u.is_admin || u.isadmin));
 
-        const txs = getTransactions(u.id) || [];
-        const totalEarned = txs
-          .filter((t: any) => (t.type === "income" || Number(t.amount || 0) > 0))
-          .reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+    return rawUsers.map((u: any) => {
+      const referralCode = u.referralCode || u.referral_code || u.referral || "";
+      const referredBy = u.referredBy || u.referred_by || u.referrer || "";
 
-        const userProducts = getUserProducts(u.id) || [];
-        const userWithdrawals = getWithdrawOrders(u.id) || [];
-        const userRecharges = getRechargeOrders(u.id) || [];
-
-        return {
-          id: u.id,
-          phone: u.phone,
-          balance: Number(u.balance || 0),
-          referralCode,
-          referredBy,
-          createdAt: u.createdAt || u.created_at || "",
-          isAdmin: !!(u.isAdmin || u.is_admin || u.isadmin),
-          isBanned: !!(u.isBanned || u.is_banned || u.banned || u.status === "banned"),
-          isDeleted: !!(u.isDeleted || u.is_deleted || u.deleted || u.deleted_at),
-          totalEarned,
-          totalWithdrawn: userWithdrawals
-            .filter((w: any) => w.status === "completed")
-            .reduce((s: number, w: any) => s + Number(w.amount || 0), 0),
-          totalDeposited: userRecharges
-            .filter((r: any) => r.status === "completed")
-            .reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
-          activePackages: userProducts.filter((p: any) => p.status === "active").length,
-          totalPackages: userProducts.length,
-          teamMembers
-        } as UserSummary;
+      const teamMembers = allUsers.filter((x: any) => {
+        const xReferredBy = x.referredBy || x.referred_by || x.referrer || "";
+        return xReferredBy === u.id;
       });
 
-    return normalized;
+      const txs = getTransactions(u.id) || [];
+      const totalEarned = txs
+        .filter((t: any) => t.type === "income" || t.type === "bonus" || t.type === "gift" || t.type === "referral" || Number(t.amount || 0) > 0)
+        .reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+
+      const userProducts = getUserProducts(u.id) || [];
+      const userWithdrawals = getWithdrawOrders(u.id) || [];
+      const userRecharges = getRechargeOrders(u.id) || [];
+
+      return {
+        id: u.id,
+        phone: u.phone,
+        fullName: u.fullName || u.full_name || u.name || "",
+        balance: Number(u.balance || 0),
+        referralCode,
+        referredBy,
+        createdAt: u.createdAt || u.created_at || "",
+        isAdmin: !!(u.isAdmin || u.is_admin || u.isadmin),
+        isBanned: !!(u.isBanned || u.is_banned || u.banned || u.status === "banned"),
+        isDeleted: !!(u.isDeleted || u.is_deleted || u.deleted || u.deleted_at),
+        totalEarned,
+        totalWithdrawn: userWithdrawals.filter((w: any) => w.status === "completed").reduce((s: number, w: any) => s + Number(w.amount || 0), 0),
+        totalDeposited: userRecharges.filter((r: any) => r.status === "completed").reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
+        activePackages: userProducts.filter((p: any) => p.status === "active").length,
+        totalPackages: userProducts.length,
+        teamMembers,
+        teamSize: teamMembers.length,
+        level: Number(u.level || 1)
+      } as UserSummary;
+    });
   }, [refreshKey]);
 
   const rechargeOrders = getRechargeOrders();
@@ -428,12 +512,88 @@ export default function AdminPage() {
   const pendingWithdraw = withdrawOrders.filter((o: any) => o.status === "pending");
   const pendingResets = passwordResets.filter((r: any) => r.status === "pending");
 
-  const totalBalance = users.reduce((s: number, u: UserSummary) => s + Number(u.balance || 0), 0);
-  const totalRecharge = rechargeOrders.filter((o: any) => o.status === "completed").reduce((s: number, o: any) => s + Number(o.amount || 0), 0);
+  const totalBalance = users.reduce((s, u) => s + Number(u.balance || 0), 0);
+  const totalRecharge = rechargeOrders.filter((o: any) => o.status === "completed").reduce((s, o) => s + Number(o.amount || 0), 0);
+  const totalWithdrawn = withdrawOrders.filter((o: any) => o.status === "completed").reduce((s, o) => s + Number(o.amount || 0), 0);
 
-  const filteredUsers = users.filter((u: UserSummary) =>
-    `${u.phone} ${u.referralCode} ${u.referredBy || ""}`.toLowerCase().includes(searchQ.toLowerCase())
-  );
+  const filteredUsers = useMemo(() => {
+    return users
+      .filter((u) => {
+        const q = searchQ.trim().toLowerCase();
+        const wordMatch = !q || `${u.phone} ${u.fullName || ""} ${u.referralCode}`.toLowerCase().includes(q);
+        const statusMatch =
+          statusFilter === "all" ||
+          (statusFilter === "active" && !u.isBanned && !u.isDeleted) ||
+          (statusFilter === "banned" && u.isBanned) ||
+          (statusFilter === "deleted" && u.isDeleted);
+
+        return wordMatch && statusMatch;
+      })
+      .sort((a, b) => {
+        const dir = sortDir === "asc" ? 1 : -1;
+
+        const values: Record<SortKey, any> = {
+          phone: (a.phone || "").localeCompare(b.phone || ""),
+          balance: Number(a.balance) - Number(b.balance),
+          createdAt: new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+          referralCode: (a.referralCode || "").localeCompare(b.referralCode || ""),
+          teamSize: Number(a.teamSize) - Number(b.teamSize)
+        };
+
+        return values[sortKey] * dir;
+      });
+  }, [users, searchQ, statusFilter, sortKey, sortDir]);
+
+  const exportUsersCSV = () => {
+    const rows = [
+      ["Phone", "Full Name", "Balance", "Referral Code", "Created At", "Team Size", "Status"],
+      ...filteredUsers.map(u => [
+        u.phone,
+        u.fullName || "",
+        String(u.balance),
+        u.referralCode,
+        new Date(u.createdAt).toLocaleString(),
+        String(u.teamSize),
+        u.isBanned ? "banned" : u.isDeleted ? "deleted" : "active"
+      ])
+    ];
+
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "legend-admin-users.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Users exported");
+  };
+
+  const toggleSelectUser = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const bulkBan = () => {
+    if (!selectedIds.length) return toast.error("Select users first");
+    selectedIds.forEach(id => {
+      updateUser(id, { isBanned: true, status: "banned" } as any);
+    });
+    toast.success(`${selectedIds.length} users banned`);
+    setRefreshKey(v => v + 1);
+    setSelectedIds([]);
+  };
+
+  const bulkDelete = () => {
+    if (!selectedIds.length) return toast.error("Select users first");
+    selectedIds.forEach(id => {
+      updateUser(id, { isDeleted: true, status: "deleted" } as any);
+    });
+    toast.success(`${selectedIds.length} users deleted`);
+    setRefreshKey(v => v + 1);
+    setSelectedIds([]);
+  };
 
   const handleApproveRecharge = (orderId: string) => {
     approveRechargeOrder(orderId);
@@ -460,14 +620,10 @@ export default function AdminPage() {
   };
 
   const handleAdjustBalance = (user: UserSummary) => {
-    const val = window.prompt(`Set new balance for ${user.phone} (current: ${formatUGX(user.balance)})`, String(user.balance));
-    if (val === null) return;
-
-    const newValue = Number(val);
-    if (Number.isNaN(newValue)) {
-      toast.error("Invalid balance");
-      return;
-    }
+    const value = window.prompt(`Set balance for ${user.phone}`, String(user.balance));
+    if (value === null) return;
+    const newValue = Number(value);
+    if (Number.isNaN(newValue)) return toast.error("Invalid amount");
 
     updateUser(user.id, { balance: newValue } as any);
     toast.success(`Balance updated for ${user.phone}`);
@@ -475,46 +631,27 @@ export default function AdminPage() {
   };
 
   const handleBanUser = (user: UserSummary) => {
-    const nextStatus = !user.isBanned;
+    const next = !user.isBanned;
     updateUser(user.id, {
-      is_banned: nextStatus,
-      isBanned: nextStatus,
-      banned: nextStatus,
-      status: nextStatus ? "banned" : "active"
+      isBanned: next,
+      status: next ? "banned" : "active"
     } as any);
-    toast.success(nextStatus ? `User ${user.phone} banned` : `User ${user.phone} unbanned`);
+
+    toast.success(next ? `User ${user.phone} banned` : `User ${user.phone} unbanned`);
     setRefreshKey(v => v + 1);
   };
 
   const handleDeleteUser = (user: UserSummary) => {
-    const confirmDelete = window.confirm(`Delete ${user.phone}? This will mark the account as deleted.`);
+    const confirmDelete = window.confirm(`Delete ${user.phone}?`);
     if (!confirmDelete) return;
 
     updateUser(user.id, {
-      is_deleted: true,
       isDeleted: true,
-      deleted: true,
-      deleted_at: new Date().toISOString()
+      status: "deleted"
     } as any);
 
     toast.success(`User ${user.phone} marked as deleted`);
     setRefreshKey(v => v + 1);
-  };
-
-  const tabs: { key: AdminTab; label: string; icon: any; badge?: number }[] = [
-    { key: "overview", label: "Overview", icon: BarChart3 },
-    { key: "users", label: "Users", icon: Users, badge: users.length },
-    { key: "recharge", label: "Recharge", icon: CreditCard, badge: pendingRecharge.length },
-    { key: "withdraw", label: "Withdraw", icon: ArrowDownToLine, badge: pendingWithdraw.length },
-    { key: "products", label: "Products", icon: TrendingUp },
-    { key: "resets", label: "Resets", icon: Shield, badge: pendingResets.length },
-    { key: "gifts", label: "Tools", icon: Gift },
-  ];
-
-  const getStatusStyle = (status: string) => {
-    if (status === "completed") return { background: "rgba(201,168,76,0.1)", color: "#c9a84c" };
-    if (status === "pending") return { background: "rgba(251,191,36,0.1)", color: "#fbbf24" };
-    return { background: "rgba(239,68,68,0.1)", color: "#ef4444" };
   };
 
   const handleLogout = () => {
@@ -522,215 +659,363 @@ export default function AdminPage() {
     navigate("/login");
   };
 
+  const getStatusStyle = (status: string) => {
+    if (status === "completed") return { background: "rgba(201,168,76,0.1)", color: "#c9a84c" };
+    if (status === "pending") return { background: "rgba(251,191,36,0.1)", color: "#fbbf24" };
+    return { background: "rgba(239,68,68,0.1)", color: "#ef4444" };
+  };
+
+  const barStats = [
+    { label: "Active Users", value: users.filter(u => !u.isBanned && !u.isDeleted).length, max: Math.max(users.length, 1) },
+    { label: "Banned", value: users.filter(u => u.isBanned).length, max: Math.max(users.length, 1) },
+    { label: "Deleted", value: users.filter(u => u.isDeleted).length, max: Math.max(users.length, 1) },
+  ];
+
   return (
     <div className="app-container min-h-screen" style={{ background: "#0a0a0a" }}>
       <div className="flex items-center justify-between p-4" style={{ background: "#111111", borderBottom: "1px solid #2a2a2a" }}>
         <div className="flex items-center gap-2">
           <Shield size={18} className="text-[#c9a84c]" />
-          <span className="text-white font-black text-lg">Admin Panel</span>
+          <span className="text-white font-black text-lg">Advanced Admin Dashboard</span>
           <span className="text-[9px] font-bold text-black px-2 py-0.5 rounded-full gold-gradient ml-1">LEGEND</span>
         </div>
 
-        <button onClick={handleLogout} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "#1e1e1e" }}>
-          <LogOut size={15} className="text-gray-400" />
-        </button>
-      </div>
-
-      <div className="flex gap-0 overflow-x-auto" style={{ background: "#111111", borderBottom: "1px solid #1a1a1a" }}>
-        {tabs.map(t => {
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-3 text-xs font-semibold relative transition-colors"
-              style={tab === t.key ? { color: "#c9a84c", borderBottom: "2px solid #c9a84c" } : { color: "#555" }}
-            >
-              <Icon size={13} />
-              {t.label}
-              {t.badge !== undefined && t.badge > 0 && (
-                <span className="absolute top-1.5 right-1 w-4 h-4 rounded-full text-[9px] font-black text-black flex items-center justify-center gold-gradient">
-                  {t.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setRefreshKey(v => v + 1)}
+            className="w-9 h-9 rounded-xl flex items-center justify-center"
+            style={{ background: "#1b1b1b", border: "1px solid #2a2a2a" }}
+          >
+            <RefreshCw size={15} className="text-gray-300" />
+          </button>
+          <button onClick={handleLogout} className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "#1e1e1e" }}>
+            <LogOut size={15} className="text-gray-400" />
+          </button>
+        </div>
       </div>
 
       <div className="p-4 pb-8">
         {tab === "overview" && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {[
-                { label: "Total Users", value: users.length, color: "#c9a84c" },
-                { label: "Pending Recharge", value: pendingRecharge.length, color: "#fbbf24" },
-                { label: "Pending Withdraw", value: pendingWithdraw.length, color: "#f87171" },
-                { label: "Active Products", value: userProducts.filter((p: any) => p.status === "active").length, color: "#34d399" },
-              ].map(stat => (
-                <div key={stat.label} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-                  <p className="text-3xl font-black" style={{ color: stat.color }}>{stat.value}</p>
-                  <p className="text-gray-500 text-xs mt-1">{stat.label}</p>
+                { label: "Total Users", value: users.length, color: "#c9a84c", icon: Users },
+                { label: "Platform Balance", value: formatUGX(totalBalance), color: "#f0c040", icon: Wallet },
+                { label: "Pending Recharge", value: pendingRecharge.length, color: "#fbbf24", icon: CreditCard },
+                { label: "Pending Withdraw", value: pendingWithdraw.length, color: "#f87171", icon: ArrowDownToLine },
+              ].map(stat => {
+                const Icon = stat.icon;
+                return (
+                  <div key={stat.label} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-gray-500 text-[11px]">{stat.label}</p>
+                        <p className="text-2xl font-black mt-2" style={{ color: stat.color }}>{stat.value}</p>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "rgba(201,168,76,0.08)" }}>
+                        <Icon size={18} className="text-[#c9a84c]" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+              <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-white font-bold text-sm">User Distribution</p>
+                  <div className="flex items-center gap-2 text-gray-500 text-[10px]">
+                    <Filter size={12} /> status filter
+                  </div>
                 </div>
-              ))}
-            </div>
 
-            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.2)" }}>
-              <p className="text-gray-500 text-xs mb-1">Total Platform Balance</p>
-              <p className="text-[#c9a84c] text-2xl font-black">{formatUGX(totalBalance)}</p>
-            </div>
-
-            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-              <p className="text-gray-500 text-xs mb-1">Total Completed Recharges</p>
-              <p className="text-white text-2xl font-black">{formatUGX(totalRecharge)}</p>
-            </div>
-
-            {pendingRecharge.length > 0 && (
-              <div className="rounded-2xl p-4" style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.2)" }}>
-                <p className="text-yellow-400 font-semibold text-sm mb-1">⚠ Action Required</p>
-                <p className="text-gray-400 text-xs">{pendingRecharge.length} recharge order(s) pending approval</p>
-                <p className="text-gray-400 text-xs">{pendingWithdraw.length} withdrawal order(s) pending approval</p>
+                <div className="space-y-3">
+                  {barStats.map(item => (
+                    <div key={item.label}>
+                      <div className="flex justify-between text-[10px] text-gray-500 mb-1">
+                        <span>{item.label}</span>
+                        <span>{item.value}</span>
+                      </div>
+                      <div className="h-2.5 rounded-full" style={{ background: "#1e1e1e" }}>
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${(item.value / item.max) * 100}%`,
+                            background:
+                              item.label === "Active Users"
+                                ? "#22c55e"
+                                : item.label === "Banned"
+                                  ? "#ef4444"
+                                  : "#f0c040"
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
+
+              <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.2)" }}>
+                <p className="text-white font-bold text-sm mb-3">Quick Summary</p>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between py-2" style={{ borderBottom: "1px solid #222" }}>
+                    <span className="text-gray-500">Total Completed Recharges</span>
+                    <span className="text-[#c9a84c] font-bold">{formatUGX(totalRecharge)}</span>
+                  </div>
+
+                  <div className="flex justify-between py-2" style={{ borderBottom: "1px solid #222" }}>
+                    <span className="text-gray-500">Total Completed Withdrawals</span>
+                    <span className="text-white font-bold">{formatUGX(totalWithdrawn)}</span>
+                  </div>
+
+                  <div className="flex justify-between py-2" style={{ borderBottom: "1px solid #222" }}>
+                    <span className="text-gray-500">Active Gift Codes</span>
+                    <span className="text-green-400 font-bold">{getGiftCodes().filter(c => !c.usedBy).length}</span>
+                  </div>
+
+                  <div className="flex justify-between py-2">
+                    <span className="text-gray-500">Open Reset Requests</span>
+                    <span className="text-yellow-400 font-bold">{pendingResets.length}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+                <p className="text-white font-bold text-sm mb-3">Recent Recharge Orders</p>
+                <div className="space-y-2">
+                  {rechargeOrders.slice(0, 4).map((order: any) => (
+                    <div key={order.id} className="rounded-xl p-2.5" style={{ background: "#1d1d1d", border: "1px solid #2a2a2a" }}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-white text-xs font-semibold">{formatUGX(order.amount)}</p>
+                          <p className="text-gray-500 text-[10px]">{order.phoneNumber}</p>
+                        </div>
+                        <span className="text-[9px] px-2 py-1 rounded-full font-medium" style={getStatusStyle(order.status)}>
+                          {order.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+                <p className="text-white font-bold text-sm mb-3">Recent Withdraw Orders</p>
+                <div className="space-y-2">
+                  {withdrawOrders.slice(0, 4).map((order: any) => (
+                    <div key={order.id} className="rounded-xl p-2.5" style={{ background: "#1d1d1d", border: "1px solid #2a2a2a" }}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-white text-xs font-semibold">{formatUGX(order.amount)}</p>
+                          <p className="text-gray-500 text-[10px]">{order.bankCard?.bank || "Bank"}</p>
+                        </div>
+                        <span className="text-[9px] px-2 py-1 rounded-full font-medium" style={getStatusStyle(order.status)}>
+                          {order.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
         {tab === "users" && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: "#1a1a1a", border: "1px solid #333" }}>
-              <Search size={14} className="text-gray-500" />
-              <input
-                value={searchQ}
-                onChange={e => setSearchQ(e.target.value)}
-                placeholder="Search by phone or referral..."
-                className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600"
-              />
+          <div className="space-y-4">
+            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2 flex-1 rounded-xl px-3 py-2.5" style={{ background: "#1a1a1a", border: "1px solid #333" }}>
+                  <Search size={14} className="text-gray-500" />
+                  <input
+                    value={searchQ}
+                    onChange={e => setSearchQ(e.target.value)}
+                    placeholder="Search by phone, name or referral..."
+                    className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={statusFilter}
+                    onChange={e => setStatusFilter(e.target.value as any)}
+                    className="rounded-xl px-3 py-2.5 text-sm text-white outline-none"
+                    style={{ background: "#1a1a1a", border: "1px solid #333" }}
+                  >
+                    <option value="all">All</option>
+                    <option value="active">Active</option>
+                    <option value="banned">Banned</option>
+                    <option value="deleted">Deleted</option>
+                  </select>
+
+                  <select
+                    value={sortKey}
+                    onChange={e => setSortKey(e.target.value as SortKey)}
+                    className="rounded-xl px-3 py-2.5 text-sm text-white outline-none"
+                    style={{ background: "#1a1a1a", border: "1px solid #333" }}
+                  >
+                    <option value="createdAt">Sort: Joined</option>
+                    <option value="balance">Sort: Balance</option>
+                    <option value="phone">Sort: Phone</option>
+                    <option value="referralCode">Sort: Referral</option>
+                    <option value="teamSize">Sort: Team</option>
+                  </select>
+
+                  <button
+                    onClick={() => setSortDir(d => d === "asc" ? "desc" : "asc")}
+                    className="rounded-xl px-3 py-2.5 text-sm text-white"
+                    style={{ background: "#1a1a1a", border: "1px solid #333" }}
+                  >
+                    {sortDir === "asc" ? "Asc" : "Desc"}
+                  </button>
+
+                  <button onClick={exportUsersCSV} className="rounded-xl px-3 py-2.5 text-sm text-black font-bold gold-gradient">
+                    <Download size={14} className="inline mr-1" />
+                    Export
+                  </button>
+                </div>
+              </div>
+
+              {selectedIds.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={bulkBan} className="rounded-xl px-3 py-2 text-xs font-semibold text-white" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                    Ban Selected ({selectedIds.length})
+                  </button>
+                  <button onClick={bulkDelete} className="rounded-xl px-3 py-2 text-xs font-semibold text-red-300" style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                    Delete Selected ({selectedIds.length})
+                  </button>
+                </div>
+              )}
             </div>
 
-            <p className="text-gray-600 text-xs">{filteredUsers.length} users</p>
+            <div className="overflow-hidden rounded-2xl" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead style={{ background: "#1a1a1a" }}>
+                    <tr className="text-gray-400">
+                      <th className="px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.length > 0 && selectedIds.length === filteredUsers.length}
+                          onChange={() => {
+                            if (selectedIds.length === filteredUsers.length) {
+                              setSelectedIds([]);
+                            } else {
+                              setSelectedIds(filteredUsers.map(u => u.id));
+                            }
+                          }}
+                          className="accent-[#c9a84c]"
+                        />
+                      </th>
+                      <th className="px-3 py-3">User</th>
+                      <th className="px-3 py-3">Balance</th>
+                      <th className="px-3 py-3">Referral</th>
+                      <th className="px-3 py-3">Team</th>
+                      <th className="px-3 py-3">Status</th>
+                      <th className="px-3 py-3">Actions</th>
+                    </tr>
+                  </thead>
 
-            {filteredUsers.map((user: UserSummary) => {
-              const teamCount = user.teamMembers.length;
-
-              return (
-                <div key={user.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white font-bold text-sm">{user.phone}</p>
-                      <p className="text-gray-500 text-[10px] mt-1">
-                        Joined: {user.createdAt ? new Date(user.createdAt).toLocaleString() : "Unknown"}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col items-end gap-2">
-                      <span className="text-[10px] font-bold text-black px-2 py-0.5 rounded-full gold-gradient">
-                        {user.referralCode || "NO CODE"}
-                      </span>
-                      {user.isBanned && (
-                        <span className="text-[9px] font-bold text-red-300 px-2 py-0.5 rounded-full" style={{ background: "rgba(239,68,68,0.12)" }}>
-                          BANNED
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 mt-3">
-                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
-                      <p className="text-[#c9a84c] font-bold text-sm">{formatUGX(user.balance)}</p>
-                      <p className="text-gray-600 text-[10px]">Balance</p>
-                    </div>
-
-                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
-                      <p className="text-white font-bold text-sm">{formatUGX(user.totalWithdrawn)}</p>
-                      <p className="text-gray-600 text-[10px]">Withdrawn</p>
-                    </div>
-
-                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
-                      <p className="text-green-400 font-bold text-sm">{user.activePackages}</p>
-                      <p className="text-gray-600 text-[10px]">Active</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 rounded-xl p-2.5" style={{ background: "#1a1a1a", border: "1px solid #2f2f2f" }}>
-                    <div className="grid grid-cols-2 gap-2 text-[10px]">
-                      <div>
-                        <p className="text-gray-500">Reg Code</p>
-                        <p className="text-white font-bold">{user.referralCode || "N/A"}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Used Code</p>
-                        <p className="text-white font-bold">{user.referredBy || "NONE"}</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 mt-2 text-[10px]">
-                      <div>
-                        <p className="text-gray-500">Team Members</p>
-                        <p className="text-white font-bold">{teamCount}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Total Earned</p>
-                        <p className="text-[#c9a84c] font-bold">{formatUGX(user.totalEarned)}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <button onClick={() => handleAdjustBalance(user)} className="py-2 rounded-xl text-[10px] font-semibold text-black gold-gradient">
-                      Adjust
-                    </button>
-
-                    <button onClick={() => handleBanUser(user)} className="py-2 rounded-xl text-[10px] font-semibold text-white"
-                      style={{ background: user.isBanned ? "#1c1c1c" : "rgba(239,68,68,0.16)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                      {user.isBanned ? "Unban" : "Ban"}
-                    </button>
-
-                    <button onClick={() => handleDeleteUser(user)} className="py-2 rounded-xl text-[10px] font-semibold text-red-300"
-                      style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                      Delete
-                    </button>
-                  </div>
-
-                  {teamCount > 0 && (
-                    <div className="mt-3 rounded-xl p-2.5" style={{ background: "#1a1a1a", border: "1px solid #2a2a2a" }}>
-                      <p className="text-gray-500 text-[10px] mb-2">Team members</p>
-                      <div className="space-y-1.5">
-                        {user.teamMembers.slice(0, 5).map((member: any) => (
-                          <div key={member.id} className="flex justify-between items-center text-[10px]">
-                            <span className="text-white">{member.phone || "Unknown"}</span>
-                            <span className="text-[#c9a84c]">{formatUGX(Number(member.balance || 0))}</span>
+                  <tbody>
+                    {filteredUsers.map(user => (
+                      <tr key={user.id} style={{ borderTop: "1px solid #1f1f1f" }}>
+                        <td className="px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(user.id)}
+                            onChange={() => toggleSelectUser(user.id)}
+                            className="accent-[#c9a84c]"
+                          />
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-black" style={{ background: "rgba(201,168,76,0.12)", color: "#c9a84c" }}>
+                              {user.fullName ? user.fullName.charAt(0).toUpperCase() : user.phone.charAt(0)}
+                            </div>
+                            <div>
+                              <p className="text-white font-semibold text-xs">{user.fullName || user.phone}</p>
+                              <p className="text-gray-500 text-[10px]">{user.phone}</p>
+                            </div>
                           </div>
-                        ))}
-                        {teamCount > 5 && (
-                          <p className="text-gray-500 text-[9px]">+{teamCount - 5} more</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                        </td>
+                        <td className="px-3 py-3">
+                          <p className="text-[#c9a84c] font-bold">{formatUGX(user.balance)}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <p className="text-white text-xs">{user.referralCode}</p>
+                          <p className="text-gray-500 text-[10px]">{user.referredBy ? `By ${user.referredBy}` : "Starter"}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <p className="text-white text-xs">{user.teamSize}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <span className="text-[9px] px-2 py-1 rounded-full font-bold"
+                            style={
+                              user.isBanned
+                                ? { background: "rgba(239,68,68,0.12)", color: "#ef4444" }
+                                : user.isDeleted
+                                  ? { background: "rgba(148,163,184,0.12)", color: "#cbd5e1" }
+                                  : { background: "rgba(34,197,94,0.12)", color: "#22c55e" }
+                            }
+                          >
+                            {user.isBanned ? "BANNED" : user.isDeleted ? "DELETED" : "ACTIVE"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => setSelectedUser(user)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "#1d1d1d" }}>
+                              <Eye size={13} className="text-gray-300" />
+                            </button>
+                            <button onClick={() => handleAdjustBalance(user)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "#1d1d1d" }}>
+                              <Wallet size={13} className="text-[#c9a84c]" />
+                            </button>
+                            <button onClick={() => handleBanUser(user)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "#1d1d1d" }}>
+                              {user.isBanned ? <UserCheck size={13} className="text-green-400" /> : <UserX size={13} className="text-red-400" />}
+                            </button>
+                            <button onClick={() => handleDeleteUser(user)} className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "#1d1d1d" }}>
+                              <Trash2 size={13} className="text-red-400" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredUsers.length === 0 && (
+                <div className="p-8 text-center">
+                  <p className="text-gray-600 text-sm">No users match your filters.</p>
                 </div>
-              );
-            })}
+              )}
+            </div>
           </div>
         )}
 
         {tab === "recharge" && (
           <div className="space-y-3">
-            <p className="text-gray-500 text-xs">{rechargeOrders.length} total orders — {pendingRecharge.length} pending</p>
+            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+              <p className="text-gray-500 text-xs">{rechargeOrders.length} total orders — {pendingRecharge.length} pending</p>
+            </div>
 
             {rechargeOrders.length === 0 ? (
-              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515" }}>
+              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                 <p className="text-gray-600 text-sm">No recharge orders</p>
               </div>
             ) : (
               rechargeOrders.map((order: any) => {
-                const user = users.find((u: UserSummary) => u.id === order.userId);
+                const user = getUsers().find((u: any) => u.id === order.userId);
 
                 return (
                   <div key={order.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <p className="text-white font-bold">{formatUGX(order.amount)}</p>
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white font-black text-lg">{formatUGX(order.amount)}</p>
                           <span
                             className="text-[9px] px-2 py-0.5 rounded-full font-bold"
                             style={
@@ -743,9 +1028,9 @@ export default function AdminPage() {
                           </span>
                         </div>
 
-                        <p className="text-gray-400 text-xs font-medium mb-2">{user?.phone || "Unknown"}</p>
+                        <p className="text-gray-400 text-xs font-medium mt-1">{user?.phone || "Unknown user"}</p>
 
-                        <div className="rounded-xl p-2.5 space-y-1.5 mb-1.5" style={{ background: "#1e1e1e", border: "1px solid #333" }}>
+                        <div className="mt-3 rounded-xl p-2.5 space-y-1.5" style={{ background: "#1e1e1e", border: "1px solid #333" }}>
                           <div className="flex justify-between text-xs">
                             <span className="text-gray-500">Sender Number</span>
                             <span className="text-white font-semibold">+256 {order.phoneNumber || "—"}</span>
@@ -776,24 +1061,26 @@ export default function AdminPage() {
                           )}
                         </div>
 
-                        <p className="text-gray-600 text-xs">{new Date(order.createdAt).toLocaleString()}</p>
+                        <p className="text-gray-600 text-[10px] mt-2">{new Date(order.createdAt).toLocaleString()}</p>
                       </div>
 
-                      <span className="text-[10px] px-2 py-1 rounded-full font-medium" style={getStatusStyle(order.status)}>
-                        {order.status}
-                      </span>
+                      <div className="flex flex-col gap-2 lg:min-w-[200px]">
+                        <span className="text-[10px] px-2 py-1 rounded-full font-medium self-end" style={getStatusStyle(order.status)}>
+                          {order.status}
+                        </span>
+
+                        {order.status === "pending" && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button onClick={() => handleApproveRecharge(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-black flex items-center justify-center gap-1 gold-gradient">
+                              <Check size={13} /> Approve
+                            </button>
+                            <button onClick={() => handleRejectRecharge(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-red-400 flex items-center justify-center gap-1" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                              <X size={13} /> Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
-
-                    {order.status === "pending" && (
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => handleApproveRecharge(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-black flex items-center justify-center gap-1 gold-gradient">
-                          <Check size={13} /> Approve
-                        </button>
-                        <button onClick={() => handleRejectRecharge(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-red-400 flex items-center justify-center gap-1" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                          <X size={13} /> Reject
-                        </button>
-                      </div>
-                    )}
                   </div>
                 );
               })
@@ -803,41 +1090,46 @@ export default function AdminPage() {
 
         {tab === "withdraw" && (
           <div className="space-y-3">
-            <p className="text-gray-500 text-xs">{withdrawOrders.length} total — {pendingWithdraw.length} pending</p>
+            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+              <p className="text-gray-500 text-xs">{withdrawOrders.length} total — {pendingWithdraw.length} pending</p>
+            </div>
 
             {withdrawOrders.length === 0 ? (
-              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515" }}>
+              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                 <p className="text-gray-600 text-sm">No withdrawal orders</p>
               </div>
             ) : (
               withdrawOrders.map((order: any) => {
-                const user = users.find((u: UserSummary) => u.id === order.userId);
+                const user = getUsers().find((u: any) => u.id === order.userId);
 
                 return (
                   <div key={order.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-                    <div className="flex justify-between items-start mb-2">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div>
-                        <p className="text-white font-bold">{formatUGX(order.amount)}</p>
+                        <p className="text-white font-black text-lg">{formatUGX(order.amount)}</p>
                         <p className="text-gray-400 text-xs">{user?.phone || "Unknown"}</p>
-                        <p className="text-gray-500 text-xs">{order.bankCard?.bank} — {order.bankCard?.accountNumber}</p>
+                        <p className="text-gray-500 text-xs mt-1">{order.bankCard?.bank} — {order.bankCard?.accountNumber}</p>
                         <p className="text-gray-500 text-xs">Received: {formatUGX(order.receivedAmount)} (fee: {formatUGX(order.fee)})</p>
-                        <p className="text-gray-600 text-xs">{new Date(order.createdAt).toLocaleString()}</p>
+                        <p className="text-gray-600 text-[10px] mt-1">{new Date(order.createdAt).toLocaleString()}</p>
                       </div>
-                      <span className="text-[10px] px-2 py-1 rounded-full font-medium" style={getStatusStyle(order.status)}>
-                        {order.status}
-                      </span>
-                    </div>
 
-                    {order.status === "pending" && (
-                      <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => handleApproveWithdraw(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-black flex items-center justify-center gap-1 gold-gradient">
-                          <Check size={13} /> Approve
-                        </button>
-                        <button onClick={() => handleRejectWithdraw(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-red-400 flex items-center justify-center gap-1" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
-                          <X size={13} /> Reject
-                        </button>
+                      <div className="flex flex-col gap-2">
+                        <span className="text-[10px] px-2 py-1 rounded-full font-medium self-end" style={getStatusStyle(order.status)}>
+                          {order.status}
+                        </span>
+
+                        {order.status === "pending" && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button onClick={() => handleApproveWithdraw(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-black flex items-center justify-center gap-1 gold-gradient">
+                              <Check size={13} /> Approve
+                            </button>
+                            <button onClick={() => handleRejectWithdraw(order.id)} className="py-2.5 rounded-xl text-xs font-bold text-red-400 flex items-center justify-center gap-1" style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                              <X size={13} /> Reject
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
                 );
               })
@@ -847,18 +1139,18 @@ export default function AdminPage() {
 
         {tab === "products" && (
           <div className="space-y-3">
-            <div className="rounded-2xl p-3" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.2)" }}>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div>
-                  <p className="text-[#c9a84c] font-black text-xl">{userProducts.length}</p>
+            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid rgba(201,168,76,0.2)" }}>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl p-3 text-center" style={{ background: "#1d1d1d" }}>
+                  <p className="text-[#c9a84c] font-black text-2xl">{userProducts.length}</p>
                   <p className="text-gray-600 text-[10px]">Total Purchases</p>
                 </div>
-                <div>
-                  <p className="text-green-400 font-black text-xl">{userProducts.filter((p: any) => p.status === "active").length}</p>
+                <div className="rounded-xl p-3 text-center" style={{ background: "#1d1d1d" }}>
+                  <p className="text-green-400 font-black text-2xl">{userProducts.filter((p: any) => p.status === "active").length}</p>
                   <p className="text-gray-600 text-[10px]">Active</p>
                 </div>
-                <div>
-                  <p className="text-gray-400 font-black text-xl">{userProducts.filter((p: any) => p.status === "expired").length}</p>
+                <div className="rounded-xl p-3 text-center" style={{ background: "#1d1d1d" }}>
+                  <p className="text-gray-400 font-black text-2xl">{userProducts.filter((p: any) => p.status === "expired").length}</p>
                   <p className="text-gray-600 text-[10px]">Expired</p>
                 </div>
               </div>
@@ -894,30 +1186,24 @@ export default function AdminPage() {
 
         {tab === "resets" && (
           <div className="space-y-3">
-            <p className="text-gray-500 text-xs">{passwordResets.length} total requests — {pendingResets.length} pending</p>
+            <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+              <p className="text-gray-500 text-xs">{passwordResets.length} total requests — {pendingResets.length} pending</p>
+            </div>
 
             {passwordResets.length === 0 ? (
-              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515" }}>
+              <div className="rounded-2xl p-10 text-center" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                 <p className="text-gray-600 text-sm">No password reset requests</p>
               </div>
             ) : (
-              passwordResets.map((req: PasswordResetRequest) => (
-                <div
-                  key={req.id}
-                  className="rounded-2xl p-4"
-                  style={{
-                    background: "#151515",
-                    border: `1px solid ${req.status === "pending" ? "rgba(245,158,11,0.35)" : "#2a2a2a"}`,
-                  }}
-                >
+              passwordResets.map((req: any) => (
+                <div key={req.id} className="rounded-2xl p-4" style={{ background: "#151515", border: `1px solid ${req.status === "pending" ? "rgba(245,158,11,0.35)" : "#2a2a2a"}` }}>
                   <div className="flex justify-between items-start mb-3">
                     <div>
                       <p className="text-white font-bold text-sm">{req.phone}</p>
                       <p className="text-gray-500 text-xs">{new Date(req.createdAt).toLocaleString()}</p>
                     </div>
 
-                    <span
-                      className="text-[10px] px-2 py-1 rounded-full font-bold"
+                    <span className="text-[10px] px-2 py-1 rounded-full font-bold"
                       style={
                         req.status === "approved"
                           ? { background: "rgba(34,197,94,0.12)", color: "#22c55e" }
@@ -979,6 +1265,8 @@ export default function AdminPage() {
           />
         )}
       </div>
+
+      <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} />
     </div>
   );
 }
