@@ -101,4 +101,84 @@ export default function TeamPage() {
             <p className="text-gray-500 text-xs mt-0.5">Team Deposit</p>
           </div>
           <div className="text-right">
-            <p className="text-xl font-black text-[#c9a84c]">{formatUGX(commissions.level1
+            <p className="text-xl font-black text-[#c9a84c]">{formatUGX(commissions.level1 + commissions.level2 + commissions.level3)}</p>
+            <p className="text-gray-500 text-xs mt-0.5">Total Commission</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-4 mb-3 rounded-2xl p-4" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+        <p className="text-gray-400 text-sm mb-2 font-medium">Share URL</p>
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex-1 rounded-xl px-3 py-2.5 text-xs text-gray-400 truncate" style={{ background: '#1e1e1e', border: '1px solid #333' }}>
+            {referralUrl}
+          </div>
+          <button onClick={copy} className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#2a2a2a' }}>
+            {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} className="text-gray-400" />}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={copy} className="py-3.5 rounded-xl font-bold text-black text-sm gold-gradient flex items-center justify-center gap-2">
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+            {copied ? 'Copied!' : 'Copy Link'}
+          </button>
+          <button onClick={() => navigate('/invite')}
+            className="py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2"
+            style={{ background: 'rgba(201,168,76,0.15)', border: '1px solid rgba(201,168,76,0.3)', color: '#c9a84c' }}>
+            <Share2 size={16} /> Invite Page
+          </button>
+        </div>
+      </div>
+
+      <div className="px-4 space-y-2 mb-4">
+        {levels.map((lvl, i) => (
+          <div key={lvl.level} className="rounded-2xl p-4" style={{
+            background: i === 0 ? 'linear-gradient(135deg, #1a1400, #2a2000)' : '#151515',
+            border: i === 0 ? '1px solid rgba(201,168,76,0.4)' : '1px solid #2a2a2a',
+          }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-black text-white text-base">Level {lvl.level}</p>
+                <p className="text-gray-500 text-xs mt-0.5">{lvl.members} Members</p>
+              </div>
+              <div className="text-right">
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <p className="text-[10px] text-gray-500">Rate</p>
+                    <p className="text-[#c9a84c] font-black text-2xl">{lvl.rate}</p>
+                  </div>
+                  <div style={{ width: 1, height: 40, background: 'rgba(201,168,76,0.2)' }} />
+                  <div className="text-right">
+                    <p className="text-[10px] text-gray-500">Commission</p>
+                    <p className="text-white font-bold text-sm">{formatUGX(lvl.commission)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {totalTeam === 0 ? (
+        <div className="mx-4 rounded-2xl p-10 text-center" style={{ background: '#151515' }}>
+          <Users size={32} className="text-gray-600 mx-auto mb-2" />
+          <p className="text-gray-600 text-sm">No Members yet</p>
+        </div>
+      ) : (
+        <div className="px-4 space-y-2">
+          <h3 className="text-white font-semibold text-sm">Level 1 Members</h3>
+          {level1.map((member: any) => (
+            <div key={member.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+              <div>
+                <p className="text-white text-sm font-medium">{member.phone}</p>
+                <p className="text-gray-500 text-xs">{new Date(member.created_at).toLocaleDateString()}</p>
+              </div>
+              <span className="text-[#c9a84c] text-xs font-semibold">Lv1</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="h-4" />
+    </AppLayout>
+  );
+}
