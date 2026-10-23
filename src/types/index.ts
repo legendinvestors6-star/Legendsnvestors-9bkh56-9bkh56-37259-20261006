@@ -23,17 +23,22 @@ export interface User {
   level: number;
   referralCode: string;
   referredBy?: string;
+  fullName?: string;
+  name?: string;
   checkInDays: number;
   lastCheckIn?: string;
   bankCard?: BankCard;
   createdAt: string;
   isAdmin?: boolean;
+  isBanned?: boolean;
+  isDeleted?: boolean;
+  status?: "active" | "banned" | "deleted";
 }
 
 export interface Transaction {
   id: string;
   userId: string;
-  type: 'recharge' | 'withdraw' | 'income' | 'bonus' | 'checkin' | 'referral';
+  type: 'recharge' | 'withdraw' | 'income' | 'bonus' | 'checkin' | 'referral' | 'daily-income' | 'gift' | 'purchase';
   amount: number;
   status: 'pending' | 'completed' | 'rejected';
   description: string;
@@ -67,8 +72,12 @@ export interface UserProduct {
   id: string;
   userId: string;
   productId: number;
-  purchaseDate: string;
-  endDate: string;
-  totalEarned: number;
+  price: number;
+  dailyIncome: number;
+  term: number;
+  purchasedAt: string;
   status: 'active' | 'expired';
+  totalEarned?: number;
+  purchaseDate?: string;
+  endDate?: string;
 }
