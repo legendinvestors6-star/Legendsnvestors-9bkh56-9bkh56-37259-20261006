@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import {
   Users, CreditCard, ArrowDownToLine, BarChart3, Check, X, Search,
-  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye, Copy, Plus
+  LogOut, Shield, TrendingUp, Gift, Bell, DollarSign, Trash2, Eye, Copy, Plus,
+  UserX, UserCheck, Wallet, UsersRound, CalendarDays, Ban
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { createClient } from "@supabase/supabase-js";
 import { PRODUCTS } from "@/constants/products";
 import {
   getUsers, getRechargeOrders, getWithdrawOrders, getUserProducts,
@@ -14,14 +14,27 @@ import {
   getGiftCodes, createGiftCode, deleteGiftCode,
   getPasswordResets, approvePasswordReset, rejectPasswordReset
 } from "@/lib/storage";
-import type { PasswordResetRequest } from "@/lib/storage";
-import type { GiftCode } from "@/lib/storage";
-import type { User, RechargeOrder, WithdrawOrder } from "@/types";
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+type AdminTab = "overview" | "users" | "recharge" | "withdraw" | "products" | "gifts" | "resets";
+
+type UserSummary = {
+  id: string;
+  name: string;
+  phone: string;
+  balance: number;
+  referralCode: string;
+  referredBy: string;
+  createdAt: string;
+  isAdmin: boolean;
+  isBanned: boolean;
+  isDeleted: boolean;
+  totalEarned: number;
+  totalWithdrawn: number;
+  totalDeposited: number;
+  activePackages: number;
+  totalPackages: number;
+  teamMembers: any[];
+};
 
 function GiftToolsTab({
   users,
@@ -29,9 +42,9 @@ function GiftToolsTab({
   withdrawOrders,
   onRefresh,
 }: {
-  users: User[];
-  rechargeOrders: RechargeOrder[];
-  withdrawOrders: WithdrawOrder[];
+  users: any[];
+  rechargeOrders: any[];
+  withdrawOrders: any[];
   onRefresh: () => void;
 }) {
   const [giftCode, setGiftCode] = useState("");
@@ -42,7 +55,7 @@ function GiftToolsTab({
   const [creditNote, setCreditNote] = useState("");
   const [deductUser, setDeductUser] = useState("");
   const [deductAmount, setDeductAmount] = useState("");
-  const [giftCodes, setGiftCodes] = useState<GiftCode[]>(() => getGiftCodes());
+  const [giftCodes, setGiftCodes] = useState<any[]>(() => getGiftCodes());
 
   const refreshCodes = () => setGiftCodes(getGiftCodes());
 
@@ -117,9 +130,9 @@ function GiftToolsTab({
         <div className="grid grid-cols-2 gap-2">
           {[
             { label: "Total Created", value: giftCodes.length, color: "#c9a84c" },
-            { label: "Total Redeemed", value: giftCodes.filter(c => c.usedBy).length, color: "#22c55e" },
-            { label: "UGX Distributed", value: formatUGX(giftCodes.filter(c => c.usedBy).reduce((s, c) => s + c.amount, 0)), color: "#f0c040" },
-            { label: "Available / Expired", value: `${giftCodes.filter(c => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter(c => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
+            { label: "Total Redeemed", value: giftCodes.filter((c: any) => c.usedBy).length, color: "#22c55e" },
+            { label: "UGX Distributed", value: formatUGX(giftCodes.filter((c: any) => c.usedBy).reduce((s: number, c: any) => s + Number(c.amount || 0), 0)), color: "#f0c040" },
+            { label: "Available / Expired", value: `${giftCodes.filter((c: any) => !c.usedBy && !(c.expiresAt && new Date(c.expiresAt) < new Date())).length} / ${giftCodes.filter((c: any) => !c.usedBy && c.expiresAt && new Date(c.expiresAt) < new Date()).length}`, color: "#60a5fa" },
           ].map(stat => (
             <div key={stat.label} className="rounded-xl p-3 text-center" style={{ background: "#1e1e1e" }}>
               <p className="font-black text-sm" style={{ color: stat.color }}>{stat.value}</p>
@@ -132,14 +145,14 @@ function GiftToolsTab({
       <div className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
         <div className="flex items-center justify-between mb-3">
           <p className="text-white font-bold text-sm">Gift Codes ({giftCodes.length})</p>
-          <span className="text-[10px] text-gray-500">{giftCodes.filter(c => !c.usedBy).length} available</span>
+          <span className="text-[10px] text-gray-500">{giftCodes.filter((c: any) => !c.usedBy).length} available</span>
         </div>
 
         {giftCodes.length === 0 ? (
           <p className="text-gray-600 text-xs text-center py-4">No gift codes yet. Create one above.</p>
         ) : (
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {giftCodes.map(gc => (
+            {giftCodes.map((gc: any) => (
               <div
                 key={gc.id}
                 className="rounded-xl p-3 flex items-center justify-between"
@@ -163,11 +176,10 @@ function GiftToolsTab({
                   </div>
 
                   <p className="text-[#c9a84c] text-xs font-bold">{formatUGX(gc.amount)}</p>
-
                   {gc.note && <p className="text-gray-600 text-[10px]">{gc.note}</p>}
 
                   {gc.usedBy ? (() => {
-                    const redeemer = users.find(u => u.id === gc.usedBy);
+                    const redeemer = users.find((u: any) => u.id === gc.usedBy);
                     const redeemedAt = gc.usedAt ? new Date(gc.usedAt) : null;
                     return (
                       <div className="mt-1 rounded-lg p-1.5" style={{ background: "rgba(34,197,94,0.08)" }}>
@@ -235,7 +247,7 @@ function GiftToolsTab({
             style={{ background: "#1e1e1e", border: "1px solid #333" }}
           >
             <option value="">Select user...</option>
-            {users.map(u => (
+            {users.map((u: any) => (
               <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
             ))}
           </select>
@@ -264,7 +276,7 @@ function GiftToolsTab({
               if (!creditUser) { toast.error("Select a user"); return; }
               if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
 
-              const usr = getUsers().find(u => u.id === creditUser);
+              const usr = getUsers().find((u: any) => u.id === creditUser);
               if (!usr) return;
 
               updateUser(creditUser, { balance: usr.balance + amt, cumulativeIncome: usr.cumulativeIncome + amt });
@@ -303,7 +315,7 @@ function GiftToolsTab({
             style={{ background: "#1e1e1e", border: "1px solid #333" }}
           >
             <option value="">Select user...</option>
-            {users.map(u => (
+            {users.map((u: any) => (
               <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>
             ))}
           </select>
@@ -323,7 +335,7 @@ function GiftToolsTab({
               if (!deductUser) { toast.error("Select a user"); return; }
               if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
 
-              const usr = getUsers().find(u => u.id === deductUser);
+              const usr = getUsers().find((u: any) => u.id === deductUser);
               if (!usr) return;
               if (amt > usr.balance) { toast.error("Amount exceeds user balance"); return; }
 
@@ -360,10 +372,10 @@ function GiftToolsTab({
             { label: "Total Users", value: users.length },
             { label: "Total Recharge Orders", value: rechargeOrders.length },
             { label: "Total Withdraw Orders", value: withdrawOrders.length },
-            { label: "Completed Recharges", value: formatUGX(rechargeOrders.filter(o => o.status === "completed").reduce((s, o) => s + o.amount, 0)) },
-            { label: "Pending Withdrawals", value: formatUGX(withdrawOrders.filter(o => o.status === "pending").reduce((s, o) => s + o.amount, 0)) },
-            { label: "Total Platform Balances", value: formatUGX(users.reduce((s, u) => s + u.balance, 0)) },
-            { label: "Active Gift Codes", value: getGiftCodes().filter(c => !c.usedBy).length },
+            { label: "Completed Recharges", value: formatUGX(rechargeOrders.filter((o: any) => o.status === "completed").reduce((s: number, o: any) => s + Number(o.amount || 0), 0)) },
+            { label: "Pending Withdrawals", value: formatUGX(withdrawOrders.filter((o: any) => o.status === "pending").reduce((s: number, o: any) => s + Number(o.amount || 0), 0)) },
+            { label: "Total Platform Balances", value: formatUGX(users.reduce((s: number, u: any) => s + Number(u.balance || 0), 0)) },
+            { label: "Active Gift Codes", value: getGiftCodes().filter((c: any) => !c.usedBy).length },
           ].map(stat => (
             <div key={stat.label} className="flex justify-between items-center py-2" style={{ borderBottom: "1px solid #222" }}>
               <span className="text-gray-500 text-xs">{stat.label}</span>
@@ -385,90 +397,173 @@ function GiftToolsTab({
             if (!uid) return;
 
             const txs = getTransactions(uid);
-            const usr = getUsers().find(u => u.id === uid);
+            const usr = getUsers().find((u: any) => u.id === uid);
 
             alert(
               `${usr?.phone} — ${txs.length} transactions\n\n` +
-              txs.slice(0, 10).map(t => `${t.type.toUpperCase()}: ${t.amount >= 0 ? "+" : ""}${t.amount} UGX — ${t.description} (${t.status})`).join("\n")
+              txs.slice(0, 10).map((t: any) => `${t.type.toUpperCase()}: ${t.amount >= 0 ? "+" : ""}${t.amount} UGX — ${t.description} (${t.status})`).join("\n")
             );
           }}
           className="w-full rounded-xl px-3 py-2.5 text-sm text-white outline-none"
           style={{ background: "#1e1e1e", border: "1px solid #333" }}
         >
           <option value="">Select user to view transactions...</option>
-          {users.map(u => <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>)}
+          {users.map((u: any) => <option key={u.id} value={u.id}>{u.phone} — {formatUGX(u.balance)}</option>)}
         </select>
       </div>
     </div>
   );
 }
 
-type AdminTab = "overview" | "users" | "recharge" | "withdraw" | "products" | "gifts" | "resets";
-
 export default function AdminPage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<AdminTab>("overview");
   const [searchQ, setSearchQ] = useState("");
-  const [refresh, setRefresh] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const users = getUsers().filter(u => !u.isAdmin);
+  const users = useMemo(() => {
+    const allUsers = getUsers() || [];
+    const normalized = allUsers
+      .filter((u: any) => !u.isAdmin && !u.is_admin && !u.isadmin)
+      .map((u: any) => {
+        const referralCode = u.referralCode || u.referral_code || u.referral || "";
+        const referredBy = u.referredBy || u.referred_by || u.referrer || "";
+        const teamMembers = allUsers.filter((x: any) => {
+          const xReferral = x.referralCode || x.referral_code || x.referral || "";
+          const xReferredBy = x.referredBy || x.referred_by || x.referrer || "";
+          return xReferral === referralCode || xReferredBy === referralCode || x.referred_by === referralCode || x.referredBy === referralCode;
+        });
+
+        const txs = getTransactions(u.id) || [];
+        const totalEarned = txs.filter((t: any) => t.type === "income" || Number(t.amount || 0) > 0).reduce((s: number, t: any) => s + Number(t.amount || 0), 0);
+
+        const userProducts = getUserProducts(u.id) || [];
+        const userWithdrawals = getWithdrawOrders(u.id) || [];
+        const userRecharges = getRechargeOrders(u.id) || [];
+
+        return {
+          id: u.id,
+          name: u.name || u.full_name || u.first_name || "Unknown",
+          phone: u.phone || "",
+          balance: Number(u.balance || 0),
+          referralCode,
+          referredBy,
+          createdAt: u.createdAt || u.created_at || "",
+          isAdmin: !!(u.isAdmin || u.is_admin || u.isadmin),
+          isBanned: !!(u.isBanned || u.is_banned || u.banned || u.status === "banned"),
+          isDeleted: !!(u.isDeleted || u.is_deleted || u.deleted || u.deleted_at),
+          totalEarned,
+          totalWithdrawn: userWithdrawals.filter((w: any) => w.status === "completed").reduce((s: number, w: any) => s + Number(w.amount || 0), 0),
+          totalDeposited: userRecharges.filter((r: any) => r.status === "completed").reduce((s: number, r: any) => s + Number(r.amount || 0), 0),
+          activePackages: userProducts.filter((p: any) => p.status === "active").length,
+          totalPackages: userProducts.length,
+          teamMembers
+        } as UserSummary;
+      });
+
+    return normalized;
+  }, [refreshKey]);
+
   const rechargeOrders = getRechargeOrders();
   const withdrawOrders = getWithdrawOrders();
   const userProducts = getUserProducts();
+  const passwordResets = getPasswordResets();
 
-  const pendingRecharge = rechargeOrders.filter(o => o.status === "pending");
-  const pendingWithdraw = withdrawOrders.filter(o => o.status === "pending");
-  const totalBalance = users.reduce((s, u) => s + u.balance, 0);
-  const totalRecharge = rechargeOrders.filter(o => o.status === "completed").reduce((s, o) => s + o.amount, 0);
+  const pendingRecharge = rechargeOrders.filter((o: any) => o.status === "pending");
+  const pendingWithdraw = withdrawOrders.filter((o: any) => o.status === "pending");
+  const pendingResets = passwordResets.filter((r: any) => r.status === "pending");
+
+  const totalBalance = users.reduce((s: number, u: UserSummary) => s + Number(u.balance || 0), 0);
+  const totalRecharge = rechargeOrders.filter((o: any) => o.status === "completed").reduce((s: number, o: any) => s + Number(o.amount || 0), 0);
+
+  const filteredUsers = users.filter((u: UserSummary) =>
+    `${u.phone} ${u.name} ${u.referralCode}`.toLowerCase().includes(searchQ.toLowerCase())
+  );
 
   const handleApproveRecharge = (orderId: string) => {
     approveRechargeOrder(orderId);
     toast.success("Recharge approved");
-    setRefresh(r => r + 1);
+    setRefreshKey(v => v + 1);
   };
 
   const handleRejectRecharge = (orderId: string) => {
     rejectRechargeOrder(orderId);
     toast.success("Recharge rejected");
-    setRefresh(r => r + 1);
+    setRefreshKey(v => v + 1);
   };
 
   const handleApproveWithdraw = (orderId: string) => {
     approveWithdrawOrder(orderId);
     toast.success("Withdrawal approved");
-    setRefresh(r => r + 1);
+    setRefreshKey(v => v + 1);
   };
 
   const handleRejectWithdraw = (orderId: string) => {
     rejectWithdrawOrder(orderId);
     toast.success("Withdrawal rejected");
-    setRefresh(r => r + 1);
+    setRefreshKey(v => v + 1);
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
-    navigate("/login");
+  const handleAdjustBalance = (user: UserSummary) => {
+    const val = window.prompt(`Set new balance for ${user.phone} (current: ${formatUGX(user.balance)})`, String(user.balance));
+    if (val === null) return;
+    const newValue = Number(val);
+    if (Number.isNaN(newValue)) {
+      toast.error("Invalid balance");
+      return;
+    }
+
+    updateUser(user.id, { balance: newValue });
+    toast.success(`Balance updated for ${user.phone}`);
+    setRefreshKey(v => v + 1);
   };
 
-  const filteredUsers = users.filter(u => u.phone.toLowerCase().includes(searchQ.toLowerCase()));
+  const handleBanUser = (user: UserSummary) => {
+    const nextStatus = !user.isBanned;
+    updateUser(user.id, {
+      is_banned: nextStatus,
+      isBanned: nextStatus,
+      banned: nextStatus,
+      status: nextStatus ? "banned" : "active"
+    });
+    toast.success(nextStatus ? `User ${user.phone} banned` : `User ${user.phone} unbanned`);
+    setRefreshKey(v => v + 1);
+  };
 
-  const passwordResets = getPasswordResets();
-  const pendingResets = passwordResets.filter(r => r.status === "pending");
+  const handleDeleteUser = (user: UserSummary) => {
+    const confirmDelete = window.confirm(`Delete ${user.phone}? This will mark the account as deleted.`);
+    if (!confirmDelete) return;
 
-  const tabs: { key: AdminTab; label: string; icon: typeof BarChart3; badge?: number }[] = [
+    updateUser(user.id, {
+      is_deleted: true,
+      isDeleted: true,
+      deleted: true,
+      deleted_at: new Date().toISOString()
+    });
+
+    toast.success(`User ${user.phone} marked as deleted`);
+    setRefreshKey(v => v + 1);
+  };
+
+  const tabs: { key: AdminTab; label: string; icon: any; badge?: number }[] = [
     { key: "overview", label: "Overview", icon: BarChart3 },
     { key: "users", label: "Users", icon: Users, badge: users.length },
     { key: "recharge", label: "Recharge", icon: CreditCard, badge: pendingRecharge.length },
     { key: "withdraw", label: "Withdraw", icon: ArrowDownToLine, badge: pendingWithdraw.length },
     { key: "products", label: "Products", icon: TrendingUp },
     { key: "resets", label: "Resets", icon: Shield, badge: pendingResets.length },
-    { key: "gifts", label: "Tools", icon: Gift },
+    { key: "gifts", label: "Tools", icon: Gift }
   ];
 
   const getStatusStyle = (status: string) => {
     if (status === "completed") return { background: "rgba(201,168,76,0.1)", color: "#c9a84c" };
     if (status === "pending") return { background: "rgba(251,191,36,0.1)", color: "#fbbf24" };
     return { background: "rgba(239,68,68,0.1)", color: "#ef4444" };
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    navigate("/login");
   };
 
   return (
@@ -479,6 +574,7 @@ export default function AdminPage() {
           <span className="text-white font-black text-lg">Admin Panel</span>
           <span className="text-[9px] font-bold text-black px-2 py-0.5 rounded-full gold-gradient ml-1">LEGEND</span>
         </div>
+
         <button onClick={handleLogout} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "#1e1e1e" }}>
           <LogOut size={15} className="text-gray-400" />
         </button>
@@ -514,7 +610,7 @@ export default function AdminPage() {
                 { label: "Total Users", value: users.length, color: "#c9a84c" },
                 { label: "Pending Recharge", value: pendingRecharge.length, color: "#fbbf24" },
                 { label: "Pending Withdraw", value: pendingWithdraw.length, color: "#f87171" },
-                { label: "Active Products", value: userProducts.filter(p => p.status === "active").length, color: "#34d399" },
+                { label: "Active Products", value: userProducts.filter((p: any) => p.status === "active").length, color: "#34d399" },
               ].map(stat => (
                 <div key={stat.label} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                   <p className="text-3xl font-black" style={{ color: stat.color }}>{stat.value}</p>
@@ -550,66 +646,124 @@ export default function AdminPage() {
               <input
                 value={searchQ}
                 onChange={e => setSearchQ(e.target.value)}
-                placeholder="Search by phone..."
+                placeholder="Search by phone or referral..."
                 className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600"
               />
             </div>
 
             <p className="text-gray-600 text-xs">{filteredUsers.length} users</p>
 
-            {filteredUsers.map(user => (
-              <div key={user.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
-                <div className="flex items-start justify-between mb-2">
-                  <div>
-                    <p className="text-white font-bold text-sm">{user.phone}</p>
-                    <p className="text-gray-500 text-xs">{new Date(user.createdAt).toLocaleDateString()}</p>
+            {filteredUsers.map((user: UserSummary) => {
+              const teamCount = user.teamMembers.length;
+
+              return (
+                <div key={user.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-bold text-sm">{user.name || "Unnamed User"}</p>
+                      <p className="text-white text-xs">{user.phone}</p>
+                      <p className="text-gray-500 text-[10px] mt-1">
+                        Joined: {user.createdAt ? new Date(user.createdAt).toLocaleString() : "Unknown"} 
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col items-end gap-2">
+                      <span className="text-[10px] font-bold text-black px-2 py-0.5 rounded-full gold-gradient">
+                        {user.referralCode || "NO CODE"}
+                      </span>
+                      {user.isBanned && (
+                        <span className="text-[9px] font-bold text-red-300 px-2 py-0.5 rounded-full" style={{ background: "rgba(239,68,68,0.12)" }}>
+                          BANNED
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <span className="text-[10px] font-bold text-black px-2 py-0.5 rounded-full gold-gradient">Lv{user.level}</span>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
-                    <p className="text-[#c9a84c] font-bold text-sm">{formatUGX(user.balance)}</p>
-                    <p className="text-gray-600 text-[10px]">Balance</p>
+                  <div className="grid grid-cols-3 gap-2 mt-3">
+                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
+                      <p className="text-[#c9a84c] font-bold text-sm">{formatUGX(user.balance)}</p>
+                      <p className="text-gray-600 text-[10px]">Balance</p>
+                    </div>
+
+                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
+                      <p className="text-white font-bold text-sm">{formatUGX(user.totalWithdrawn)}</p>
+                      <p className="text-gray-600 text-[10px]">Withdrawn</p>
+                    </div>
+
+                    <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
+                      <p className="text-green-400 font-bold text-sm">{user.activePackages}</p>
+                      <p className="text-gray-600 text-[10px]">Active</p>
+                    </div>
                   </div>
 
-                  <div className="rounded-xl p-2 text-center" style={{ background: "#1e1e1e" }}>
-                    <p className="text-white font-bold text-sm">{user.referralCode}</p>
-                    <p className="text-gray-600 text-[10px]">Referral Code</p>
+                  <div className="mt-3 rounded-xl p-2.5" style={{ background: "#1a1a1a", border: "1px solid #2f2f2f" }}>
+                    <div className="grid grid-cols-2 gap-2 text-[10px]">
+                      <div>
+                        <p className="text-gray-500">Reg Code</p>
+                        <p className="text-white font-bold">{user.referralCode || "N/A"}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Used Code</p>
+                        <p className="text-white font-bold">{user.referredBy || "NONE"}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 mt-2 text-[10px]">
+                      <div>
+                        <p className="text-gray-500">Team Members</p>
+                        <p className="text-white font-bold">{teamCount}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Total Earned</p>
+                        <p className="text-[#c9a84c] font-bold">{formatUGX(user.totalEarned)}</p>
+                      </div>
+                    </div>
                   </div>
-                </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => {
-                      const amt = parseInt(prompt("Add balance amount (UGX):") || "0");
-                      if (amt > 0) {
-                        updateUser(user.id, { balance: user.balance + amt });
-                        toast.success(`Added ${formatUGX(amt)} to ${user.phone}`);
-                        setRefresh(r => r + 1);
-                      }
-                    }}
-                    className="py-2 rounded-xl text-xs font-semibold text-black gold-gradient"
-                  >
-                    + Add Balance
-                  </button>
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => handleAdjustBalance(user)}
+                      className="py-2 rounded-xl text-[10px] font-semibold text-black gold-gradient"
+                    >
+                      Adjust
+                    </button>
 
-                  <button
-                    onClick={() => {
-                      const pwd = prompt("New password:");
-                      if (pwd) {
-                        updateUser(user.id, { password: pwd });
-                        toast.success("Password updated");
-                      }
-                    }}
-                    className="py-2 rounded-xl text-xs font-semibold text-gray-300"
-                    style={{ background: "#2a2a2a" }}
-                  >
-                    Reset Password
-                  </button>
+                    <button
+                      onClick={() => handleBanUser(user)}
+                      className="py-2 rounded-xl text-[10px] font-semibold text-white"
+                      style={{ background: user.isBanned ? "#1c1c1c" : "rgba(239,68,68,0.16)", border: "1px solid rgba(239,68,68,0.2)" }}
+                    >
+                      {user.isBanned ? "Unban" : "Ban"}
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteUser(user)}
+                      className="py-2 rounded-xl text-[10px] font-semibold text-red-300"
+                      style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.2)" }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  {teamCount > 0 && (
+                    <div className="mt-3 rounded-xl p-2.5" style={{ background: "#1a1a1a", border: "1px solid #2a2a2a" }}>
+                      <p className="text-gray-500 text-[10px] mb-2">Team members</p>
+                      <div className="space-y-1.5">
+                        {user.teamMembers.slice(0, 5).map((member: any) => (
+                          <div key={member.id} className="flex justify-between items-center text-[10px]">
+                            <span className="text-white">{member.phone || "Unknown"}</span>
+                            <span className="text-[#c9a84c]">{formatUGX(Number(member.balance || 0))}</span>
+                          </div>
+                        ))}
+                        {teamCount > 5 && (
+                          <p className="text-gray-500 text-[9px]">+{teamCount - 5} more</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -622,9 +776,8 @@ export default function AdminPage() {
                 <p className="text-gray-600 text-sm">No recharge orders</p>
               </div>
             ) : (
-              rechargeOrders.map(order => {
-                const user = getUsers().find(u => u.id === order.userId);
-
+              rechargeOrders.map((order: any) => {
+                const user = users.find((u: UserSummary) => u.id === order.userId);
                 return (
                   <div key={order.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
                     <div className="flex justify-between items-start mb-3">
@@ -650,7 +803,6 @@ export default function AdminPage() {
                             <span className="text-gray-500">Sender Number</span>
                             <span className="text-white font-semibold">+256 {order.phoneNumber || "—"}</span>
                           </div>
-
                           {order.paymentMethod === "MTN" ? (
                             <>
                               <div className="flex justify-between text-xs">
@@ -660,10 +812,6 @@ export default function AdminPage() {
                               <div className="flex justify-between text-xs">
                                 <span className="text-gray-500">Account Name</span>
                                 <span className="text-gray-300">{order.mtnName || "Nabakooza Milly"}</span>
-                              </div>
-                              <div className="flex justify-between text-xs">
-                                <span className="text-gray-500">Dial</span>
-                                <span className="text-green-400 font-semibold">*185*1#</span>
                               </div>
                             </>
                           ) : (
@@ -675,10 +823,6 @@ export default function AdminPage() {
                               <div className="flex justify-between text-xs">
                                 <span className="text-gray-500">Merchant Name</span>
                                 <span className="text-gray-300">Social Development Investors</span>
-                              </div>
-                              <div className="flex justify-between text-xs">
-                                <span className="text-gray-500">Dial</span>
-                                <span className="text-green-400 font-semibold">*185*9#</span>
                               </div>
                             </>
                           )}
@@ -718,8 +862,8 @@ export default function AdminPage() {
                 <p className="text-gray-600 text-sm">No withdrawal orders</p>
               </div>
             ) : (
-              withdrawOrders.map(order => {
-                const user = getUsers().find(u => u.id === order.userId);
+              withdrawOrders.map((order: any) => {
+                const user = users.find((u: UserSummary) => u.id === order.userId);
 
                 return (
                   <div key={order.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
@@ -762,19 +906,19 @@ export default function AdminPage() {
                   <p className="text-gray-600 text-[10px]">Total Purchases</p>
                 </div>
                 <div>
-                  <p className="text-green-400 font-black text-xl">{userProducts.filter(p => p.status === "active").length}</p>
+                  <p className="text-green-400 font-black text-xl">{userProducts.filter((p: any) => p.status === "active").length}</p>
                   <p className="text-gray-600 text-[10px]">Active</p>
                 </div>
                 <div>
-                  <p className="text-gray-400 font-black text-xl">{userProducts.filter(p => p.status === "expired").length}</p>
+                  <p className="text-gray-400 font-black text-xl">{userProducts.filter((p: any) => p.status === "expired").length}</p>
                   <p className="text-gray-600 text-[10px]">Expired</p>
                 </div>
               </div>
             </div>
 
-            {PRODUCTS.map(product => {
-              const purchases = userProducts.filter(p => p.productId === product.id);
-              const activeCount = purchases.filter(p => p.status === "active").length;
+            {PRODUCTS.map((product: any) => {
+              const purchases = userProducts.filter((p: any) => p.productId === product.id);
+              const activeCount = purchases.filter((p: any) => p.status === "active").length;
 
               return (
                 <div key={product.id} className="rounded-2xl p-4" style={{ background: "#151515", border: "1px solid #2a2a2a" }}>
@@ -809,7 +953,7 @@ export default function AdminPage() {
                 <p className="text-gray-600 text-sm">No password reset requests</p>
               </div>
             ) : (
-              passwordResets.map((req: PasswordResetRequest) => (
+              passwordResets.map((req: any) => (
                 <div
                   key={req.id}
                   className="rounded-2xl p-4"
@@ -842,16 +986,7 @@ export default function AdminPage() {
                     <div className="rounded-xl p-2.5 mb-3" style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.15)" }}>
                       <p className="text-gray-500 text-[10px] mb-0.5">Requested new password:</p>
                       <p className="text-yellow-300 text-xs font-mono font-semibold">{req.newPassword}</p>
-                      <p className="text-gray-600 text-[9px] mt-1">Approving will apply this password to the account.</p>
                     </div>
-                  )}
-
-                  {req.resolvedAt && (
-                    <p className="text-gray-600 text-[10px] mb-2">Resolved: {new Date(req.resolvedAt).toLocaleString()}</p>
-                  )}
-
-                  {req.note && (
-                    <p className="text-red-400 text-xs mb-2">Note: {req.note}</p>
                   )}
 
                   {req.status === "pending" && (
@@ -860,7 +995,7 @@ export default function AdminPage() {
                         onClick={() => {
                           approvePasswordReset(req.id);
                           toast.success(`Password reset approved for ${req.phone}`);
-                          setRefresh(r => r + 1);
+                          setRefreshKey(v => v + 1);
                         }}
                         className="py-2.5 rounded-xl text-xs font-bold text-black flex items-center justify-center gap-1 gold-gradient"
                       >
@@ -872,7 +1007,7 @@ export default function AdminPage() {
                           const note = prompt("Reason for rejection (optional):") || undefined;
                           rejectPasswordReset(req.id, note);
                           toast.success("Reset request rejected");
-                          setRefresh(r => r + 1);
+                          setRefreshKey(v => v + 1);
                         }}
                         className="py-2.5 rounded-xl text-xs font-bold text-red-400 flex items-center justify-center gap-1"
                         style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}
@@ -892,7 +1027,7 @@ export default function AdminPage() {
             users={users}
             rechargeOrders={rechargeOrders}
             withdrawOrders={withdrawOrders}
-            onRefresh={() => setRefresh(r => r + 1)}
+            onRefresh={() => setRefreshKey(v => v + 1)}
           />
         )}
       </div>
