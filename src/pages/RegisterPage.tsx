@@ -8,7 +8,7 @@ import { REGISTRATION_BONUS } from '@/constants/products';
 export default function RegisterPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [fullName, setFullName] = useState(''); // NEW
+  const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -16,22 +16,43 @@ export default function RegisterPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const handleRegister = () => {
-    if (!fullName.trim() || !phone.trim() || !password.trim() || !confirm.trim()) { toast.error('Please fill in all fields'); return; }
-    if (password !== confirm) { toast.error('Passwords do not match'); return; }
-    if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
+  const handleRegister = async () => {
+    if (!fullName.trim() || !phone.trim() || !password.trim() || !confirm.trim()) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+
+    if (password !== confirm) {
+      toast.error('Passwords do not match');
+      return;
+    }
+
+    if (password.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
-      // Pass fullName as 4th param - update your registerUser to save it
-      const result = registerUser(phone.trim(), password, refCode.trim() || undefined, fullName.trim());
+
+    try {
+      const result = await registerUser(
+        phone.trim(),
+        password,
+        refCode.trim() || undefined,
+        fullName.trim()
+      );
+
       if (result.success && result.user) {
         toast.success(`Welcome ${fullName}! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
         navigate('/home');
       } else {
         toast.error(result.message);
       }
+    } catch (error: any) {
+      toast.error(error?.message || 'Registration failed');
+    } finally {
       setLoading(false);
-    }, 600);
+    }
   };
 
   return (
@@ -51,7 +72,6 @@ export default function RegisterPage() {
         </div>
       </div>
 
-      {/* Bonus Banner */}
       <div className="mx-4 mb-4 rounded-2xl p-3 flex items-center gap-3" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.3)' }}>
         <div className="w-9 h-9 gold-gradient rounded-xl flex items-center justify-center">
           <Gift size={18} className="text-black" />
@@ -64,8 +84,8 @@ export default function RegisterPage() {
 
       <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
         <h2 className="text-xl font-bold text-white mb-5">Create Account</h2>
+
         <div className="space-y-4">
-          {/* NEW: Full Name Field */}
           <div>
             <label className="text-xs font-medium text-gray-500 mb-1.5 block">Full Name</label>
             <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
@@ -92,13 +112,14 @@ export default function RegisterPage() {
                 <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
                   <Icon size={15} className="text-gray-500 mr-2" />
                   <input
-                    type={field.type} value={field.value}
+                    type={field.type}
+                    value={field.value}
                     onChange={e => field.setter(e.target.value)}
                     placeholder={field.placeholder}
                     className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600"
                   />
                   {field.hasToggle && (
-                    <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-1">
+                    <button type="button" onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-1">
                       {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
                   )}
@@ -112,7 +133,9 @@ export default function RegisterPage() {
             <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
               <Gift size={15} className="text-gray-500 mr-2" />
               <input
-                type="text" value={refCode} onChange={e => setRefCode(e.target.value)}
+                type="text"
+                value={refCode}
+                onChange={e => setRefCode(e.target.value)}
                 placeholder="Enter referral code"
                 className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600 uppercase"
               />
@@ -120,7 +143,9 @@ export default function RegisterPage() {
           </div>
 
           <button
-            onClick={handleRegister} disabled={loading}
+            type="button"
+            onClick={handleRegister}
+            disabled={loading}
             className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base disabled:opacity-60"
           >
             {loading ? 'Creating account...' : 'Register & Claim Bonus'}
@@ -132,6 +157,7 @@ export default function RegisterPage() {
           </div>
         </div>
       </div>
+
       <div className="h-8" />
     </div>
   );
