@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Copy, Check, Users, Share2 } from 'lucide-react';
+import { Copy, Check, Users } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
@@ -20,43 +20,73 @@ export default function TeamPage() {
 
   useEffect(() => {
     (async () => {
+      let userId: string | null = null;
+      let userObj: any = null;
+      const phone = localStorage.getItem('phone');
+
+      // 1. Try Supabase Auth first
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      if (user) {
+        userId = user.id;
+        const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (data) userObj = data;
+        else {
+          const { data: u } = await supabase.from('users').select('*').eq('id', user.id).single();
+          userObj = u;
+        }
+      } 
+      // 2. FALLBACK: Your custom phone login - WORKS ON ALL DEVICES
+      else if (phone) {
+        // Try users table first (your real table), then profiles
+        let { data: u } = await supabase.from('users').select('*').eq('phone', phone).single();
+        if (!u) {
+          const { data: p } = await supabase.from('profiles').select('*').eq('phone', phone).single();
+          u = p as any;
+        }
+        if (!u) {
+          navigate('/login');
+          return;
+        }
+        userObj = u;
+        userId = u.id;
+      } else {
         navigate('/login');
         return;
       }
 
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
+      setCurrentUser(userObj);
+      if (!userId) { setLoading(false); return; }
 
-      if (error || !profile) {
-        console.error('profile error', error);
-        navigate('/login');
-        return;
-      }
-      setCurrentUser(profile);
+      // Helper to query from both tables
+      const getReferrals = async (ids: string[]) => {
+        if (ids.length === 0) return [];
+        let { data } = await supabase.from('profiles').select('id, phone, created_at, balance, referral_code').in('referred_by', ids);
+        if (!data || data.length === 0) {
+          const { data: usersData } = await supabase.from('users').select('id, phone, created_at, balance, referral_code').in('referred_by', ids);
+          // Also try referrer_id if your column is different
+          if (!usersData || usersData.length === 0) {
+            const { data: usersData2 } = await supabase.from('users').select('id, phone, created_at, balance, referral_code').in('referrer_id', ids);
+            return usersData2 || [];
+          }
+          return usersData || [];
+        }
+        return data;
+      };
 
       // Level 1
-      const { data: l1 } = await supabase
-        .from('profiles')
-        .select('id, phone, created_at, balance, referral_code')
-        .eq('referred_by', user.id);
-      
-      const l1Data = l1 || [];
+      let l1Data = await getReferrals([userId]);
+      // Fallback: some projects store referral_code not id
+      if (l1Data.length === 0 && userObj?.referral_code) {
+        const { data: l1ByCode } = await supabase.from('users').select('id, phone, created_at, balance, referral_code').eq('referred_by_code', userObj.referral_code);
+        if (l1ByCode && l1ByCode.length > 0) l1Data = l1ByCode;
+      }
       setLevel1(l1Data);
 
       // Level 2
       let l2Data: any[] = [];
       if (l1Data.length > 0) {
         const l1Ids = l1Data.map((u: any) => u.id);
-        const { data: l2 } = await supabase
-          .from('profiles')
-          .select('id, phone, created_at, balance, referral_code')
-          .in('referred_by', l1Ids);
-        l2Data = l2 || [];
+        l2Data = await getReferrals(l1Ids);
         setLevel2(l2Data);
       }
 
@@ -64,35 +94,20 @@ export default function TeamPage() {
       let l3Data: any[] = [];
       if (l2Data.length > 0) {
         const l2Ids = l2Data.map((u: any) => u.id);
-        const { data: l3 } = await supabase
-          .from('profiles')
-          .select('id, phone, created_at, balance')
-          .in('referred_by', l2Ids);
-        l3Data = l3 || [];
+        l3Data = await getReferrals(l2Ids);
         setLevel3(l3Data);
       }
 
       // Team Deposit
       const allTeamIds = [...l1Data, ...l2Data, ...l3Data].map((u: any) => u.id);
       if (allTeamIds.length > 0) {
-        const { data: deposits } = await supabase
-          .from('recharge_orders')
-          .select('amount')
-          .in('user_id', allTeamIds)
-          .eq('status', 'completed');
-        
-        if (deposits) {
-          setTotalDeposit(deposits.reduce((s, c) => s + Number(c.amount), 0));
-        }
+        const { data: deposits } = await supabase.from('recharge_orders').select('amount').in('user_id', allTeamIds).eq('status', 'completed');
+        if (deposits) setTotalDeposit(deposits.reduce((s, c) => s + Number(c.amount), 0));
       }
 
-      // Commissions - handle if table doesn't exist
-      const { data: comms, error: commError } = await supabase
-        .from('commissions')
-        .select('level, amount')
-        .eq('user_id', user.id);
-
-      if (!commError && comms) {
+      // Commissions
+      const { data: comms } = await supabase.from('commissions').select('level, amount').eq('user_id', userId);
+      if (comms) {
         setCommissions({
           level1: comms.filter(c => c.level === 1).reduce((s, c) => s + Number(c.amount), 0),
           level2: comms.filter(c => c.level === 2).reduce((s, c) => s + Number(c.amount), 0),
@@ -108,7 +123,6 @@ export default function TeamPage() {
   if (!currentUser) return null;
 
   const totalTeam = level1.length + level2.length + level3.length;
-  // IMPORTANT for HashRouter
   const referralUrl = `${window.location.origin}/#/register?ref=${currentUser.referral_code}`;
 
   const copy = async () => {
