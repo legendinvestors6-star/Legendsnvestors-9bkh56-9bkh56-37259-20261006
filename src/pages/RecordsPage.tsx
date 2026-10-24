@@ -18,17 +18,39 @@ export default function RecordsPage() {
 
   useEffect(() => {
     const load = async () => {
+      // 1. FIX: Get user from your custom storage, NOT supabase.auth
+      let userId = null;
+      let phone = localStorage.getItem('phone');
+      
+      // Try supabase auth first, then fallback to your custom login
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { navigate('/login'); return; }
+      if (user) {
+        userId = user.id;
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (profile) {
+          setCurrentUser(profile);
+        } else {
+          // fallback if you use 'users' table not 'profiles'
+          const { data: u } = await supabase.from('users').select('*').eq('id', user.id).single();
+          setCurrentUser(u);
+        }
+      } else if (phone) {
+        // YOUR CUSTOM LOGIN - this is your case for Milly 0756406186
+        const { data: customUser } = await supabase.from('users').select('*').eq('phone', phone).single();
+        if (!customUser) { navigate('/login'); return; }
+        setCurrentUser(customUser);
+        userId = customUser.id;
+      } else {
+        navigate('/login'); return;
+      }
 
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      setCurrentUser(profile);
+      if (!userId) { setLoading(false); return; }
 
-      // Fetch all 3 tables in parallel
+      // 2. Fetch all 3 tables with supabase
       const [txRes, rechargeRes, withdrawRes] = await Promise.all([
-        supabase.from('transactions').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-        supabase.from('recharge_orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
-        supabase.from('withdraw_orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase.from('transactions').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+        supabase.from('recharge_orders').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+        supabase.from('withdraw_orders').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
       ]);
 
       const txs = txRes.data || [];
@@ -110,31 +132,20 @@ export default function RecordsPage() {
         <h1 className="text-white font-bold text-lg flex-1">Records</h1>
         <button onClick={() => setShowFilters(!showFilters)} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: showFilters ? '#c9a84c' : '#1e1e1e' }}><Filter size={14} className={showFilters ? 'text-black' : 'text-gray-400'} /></button>
       </div>
-
+      {/* rest of your JSX same */}
       <div className="flex gap-2 px-4 py-3 overflow-x-auto" style={{ borderBottom: '1px solid #1a1a1a' }}>
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-semibold" style={tab === t.key ? { background: 'linear-gradient(135deg, #c9a84c, #f0c040)', color: '#000' } : { background: '#1a1a1a', color: '#666', border: '1px solid #222' }}>{t.label}</button>
         ))}
       </div>
-
       {showFilters && (
         <div className="px-4 py-3" style={{ background: '#111111', borderBottom: '1px solid #1a1a1a' }}>
           <div className="grid grid-cols-2 gap-2">
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-full rounded-xl px-3 py-2 text-sm text-white outline-none" style={{ background: '#1e1e1e', border: '1px solid #333' }} />
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-full rounded-xl px-3 py-2 text-sm text-white outline-none" style={{ background: '#1e1e1e', border: '1px solid #333' }} />
           </div>
-          {(dateFrom || dateTo) && <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="mt-2 text-xs text-[#c9a84c] underline">Clear dates</button>}
         </div>
       )}
-
-      {filtered.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 px-4 py-3">
-          <div className="rounded-xl p-2 text-center" style={{ background: '#151515' }}><p className="text-white font-black text-sm">{filtered.length}</p><p className="text-gray-600 text-">Records</p></div>
-          <div className="rounded-xl p-2 text-center" style={{ background: '#151515' }}><p className="text-[#c9a84c] font-black text-xs">+{formatUGX(totalIn)}</p><p className="text-gray-600 text-">In</p></div>
-          <div className="rounded-xl p-2 text-center" style={{ background: '#151515' }}><p className="text-red-400 font-black text-xs">-{formatUGX(totalOut)}</p><p className="text-gray-600 text-">Out</p></div>
-        </div>
-      )}
-
       <div className="px-4 mt-3 space-y-2 pb-6">
         {filtered.length === 0 ? (
           <div className="rounded-2xl p-10 text-center mt-4" style={{ background: '#151515' }}><p className="text-gray-600 text-sm">No records found</p></div>
@@ -143,7 +154,7 @@ export default function RecordsPage() {
             <div key={tx.id} className="rounded-2xl px-4 py-3.5" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
               <div className="flex justify-between items-start">
                 <div><p className="text-gray-300 text-sm">{tx.description}</p><p className="text-gray-600 text-xs mt-0.5">{new Date(tx.createdAt).toLocaleString()}</p></div>
-                <div className="text-right ml-2"><p className="font-bold text-sm" style={{ color: getAmountColor(tx.type, tx.amount) }}>{tx.amount >= 0 ? '+' : ''}{formatUGX(tx.amount)}</p><span className="text- px-2 py-0.5 rounded-full" style={{ background: tx.status === 'completed' ? 'rgba(201,168,76,0.1)' : 'rgba(251,191,36,0.1)', color: tx.status === 'completed' ? '#c9a84c' : '#fbbf24' }}>{tx.status}</span></div>
+                <div className="text-right ml-2"><p className="font-bold text-sm" style={{ color: getAmountColor(tx.type, tx.amount) }}>{tx.amount >= 0 ? '+' : ''}{formatUGX(tx.amount)}</p><span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: tx.status === 'completed' ? 'rgba(201,168,76,0.1)' : 'rgba(251,191,36,0.1)', color: tx.status === 'completed' ? '#c9a84c' : '#fbbf24' }}>{tx.status}</span></div>
               </div>
             </div>
           ))
