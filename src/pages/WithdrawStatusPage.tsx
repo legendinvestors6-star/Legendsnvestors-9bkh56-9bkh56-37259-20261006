@@ -92,23 +92,51 @@ export default function WithdrawStatusPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [filter, setFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('all');
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  const loadOrders = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { navigate('/login'); return; }
-    const { data } = await supabase.from('withdraw_orders').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+  const loadOrders = async (uid?: string) => {
+    const idToUse = uid || userId;
+    if (!idToUse) return;
+    const { data } = await supabase.from('withdraw_orders').select('*').eq('user_id', idToUse).order('created_at', { ascending: false });
     setOrders(data || []);
     setLoading(false);
   };
 
-  useEffect(() => { loadOrders(); }, []);
-
-  // Auto-refresh + realtime
   useEffect(() => {
-    const iv = setInterval(loadOrders, 15000);
+    (async () => {
+      let uid: string | null = null;
+      const phone = localStorage.getItem('phone');
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        uid = user.id;
+      } else if (phone) {
+        // YOUR CUSTOM LOGIN - WORKS ON ALL DEVICES
+        const { data: u } = await supabase.from('users').select('id').eq('phone', phone).single();
+        if (u) uid = u.id;
+        else {
+          const { data: p } = await supabase.from('profiles').select('id').eq('phone', phone).single();
+          if (p) uid = p.id;
+        }
+      }
+
+      if (!uid) {
+        navigate('/login');
+        return;
+      }
+      setUserId(uid);
+      const { data } = await supabase.from('withdraw_orders').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+      setOrders(data || []);
+      setLoading(false);
+    })();
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const iv = setInterval(() => loadOrders(), 15000);
     const channel = supabase.channel('withdraw-status').on('postgres_changes', { event: '*', schema: 'public', table: 'withdraw_orders' }, () => loadOrders()).subscribe();
     return () => { clearInterval(iv); supabase.removeChannel(channel); };
-  }, []);
+  }, [userId]);
 
   const filtered = filter === 'all' ? orders : orders.filter(o => o.status === filter);
   const pending = orders.filter(o => o.status === 'pending').length;
@@ -123,7 +151,7 @@ export default function WithdrawStatusPage() {
       <div className="flex items-center gap-3 p-4" style={{ background: '#111', borderBottom: '1px solid #2a2a2a' }}>
         <button onClick={() => navigate(-1)} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: '#1e1e1e' }}><ChevronLeft size={18} className="text-gray-400" /></button>
         <h1 className="text-white font-bold text-lg flex-1">Withdrawal Status</h1>
-        <button onClick={loadOrders} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: '#1e1e1e' }}><RefreshCw size={14} className="text-gray-400" /></button>
+        <button onClick={() => loadOrders()} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: '#1e1e1e' }}><RefreshCw size={14} className="text-gray-400" /></button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 px-4 py-4">
