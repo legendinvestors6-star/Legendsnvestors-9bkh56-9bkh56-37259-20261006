@@ -8,47 +8,83 @@ const BANKS = ['MTN', 'AIRTEL'];
 
 export default function BindCardPage() {
   const navigate = useNavigate();
+
   const [user, setUser] = useState<any>(null);
   const [bank, setBank] = useState('');
   const [holderName, setHolderName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [showBankPicker, setShowBankPicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     async function loadUser() {
-      const {
-        data: { user: authUser },
-        error: authError,
-      } = await supabase.auth.getUser();
+      try {
+        setAuthLoading(true);
 
-      if (authError || !authUser) {
-        navigate('/');
-        return;
+        const {
+          data: { user: authUser },
+          error: authError,
+        } = await supabase.auth.getUser();
+
+        if (authError || !authUser) {
+          navigate('/', { replace: true });
+          return;
+        }
+
+        let { data: profile, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authUser.id)
+          .maybeSingle();
+
+        if (error && error.code !== 'PGRST116') {
+          console.error('Profile load error:', error);
+          navigate('/', { replace: true });
+          return;
+        }
+
+        if (!profile) {
+          const { data: createdProfile, error: insertError } = await supabase
+            .from('profiles')
+            .insert([
+              {
+                id: authUser.id,
+                phone: authUser.phone || '',
+                bank_name: '',
+                account_holder_name: '',
+                account_number: '',
+                updated_at: new Date().toISOString(),
+              },
+            ])
+            .select()
+            .single();
+
+          if (insertError) {
+            console.error('Create profile error:', insertError);
+            navigate('/', { replace: true });
+            return;
+          }
+
+          profile = createdProfile;
+        }
+
+        setUser(profile);
+        setBank(profile.bank_name || '');
+        setHolderName(profile.account_holder_name || profile.phone || '');
+        setAccountNumber(profile.account_number || '');
+      } catch (err) {
+        console.error('Unexpected error:', err);
+        navigate('/', { replace: true });
+      } finally {
+        setAuthLoading(false);
       }
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (error) {
-        console.error('Load profile error:', error);
-        navigate('/');
-        return;
-      }
-
-      setUser(data);
-      setBank(data.bank_name || '');
-      setHolderName(data.account_holder_name || data.phone || '');
-      setAccountNumber(data.account_number || '');
     }
 
     loadUser();
   }, [navigate]);
 
-  if (!user) return null;
+  if (authLoading || !user) return null;
 
   const handleConfirm = async () => {
     if (!bank) {
@@ -70,13 +106,16 @@ export default function BindCardPage() {
 
     const { error } = await supabase
       .from('profiles')
-      .update({
-        bank_name: bank,
-        account_holder_name: holderName.trim(),
-        account_number: accountNumber.trim(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', user.id);
+      .upsert(
+        {
+          id: user.id,
+          bank_name: bank,
+          account_holder_name: holderName.trim(),
+          account_number: accountNumber.trim(),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
 
     setLoading(false);
 
@@ -232,4 +271,4 @@ export default function BindCardPage() {
       </div>
     </div>
   );
-                       }
+    }
