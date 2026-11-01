@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ChevronLeft, Gift, Tag } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { TELEGRAM_LINK } from '@/constants/products';
+import { getCurrentUser } from '@/lib/storage';
 
 const formatUGX = (n: number) => `UGX ${Number(n || 0).toLocaleString()}`;
 
@@ -15,48 +15,15 @@ export default function RedeemGiftPage() {
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
-    let mounted = true;
+    const user = getCurrentUser();
 
-    const loadUser = async () => {
-      const { data: { session }, error } = await supabase.auth.getSession();
+    if (!user) {
+      navigate('/login', { replace: true });
+      return;
+    }
 
-      if (!mounted) return;
-
-      if (error || !session) {
-        navigate('/login', { replace: true });
-        return;
-      }
-
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-
-      if (!mounted) return;
-
-      if (profileError) {
-        console.error(profileError);
-        navigate('/login', { replace: true });
-        return;
-      }
-
-      setCurrentUser(profile);
-      setAuthReady(true);
-    };
-
-    loadUser();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        navigate('/login', { replace: true });
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    setCurrentUser(user);
+    setAuthReady(true);
   }, [navigate]);
 
   if (!authReady || !currentUser) {
@@ -74,57 +41,18 @@ export default function RedeemGiftPage() {
     try {
       const enteredCode = code.trim().toUpperCase();
 
-      const { data: gift, error: findError } = await supabase
-        .from('gift_codes')
-        .select('*')
-        .eq('code', enteredCode)
-        .single();
+      const { redeemGiftCode } = await import('@/lib/storage');
+      const result = await redeemGiftCode(currentUser.id, enteredCode);
 
-      if (findError || !gift) {
-        toast.error('Invalid gift code');
+      if (!result.success) {
+        toast.error(result.message || 'Invalid gift code');
         return;
       }
 
-      if (gift.used_by) {
-        toast.error('This gift code has already been used');
-        return;
-      }
-
-      if (gift.expires_at && new Date(gift.expires_at) < new Date()) {
-        toast.error('This gift code has expired');
-        return;
-      }
-
-      const { error: updateError } = await supabase
-        .from('gift_codes')
-        .update({
-          used_by: currentUser.id,
-          used_at: new Date().toISOString(),
-        })
-        .eq('id', gift.id);
-
-      if (updateError) throw updateError;
-
-      const newBalance = Number(currentUser.balance || 0) + Number(gift.amount);
-
-      const { error: balanceError } = await supabase
-        .from('profiles')
-        .update({ balance: newBalance })
-        .eq('id', currentUser.id);
-
-      if (balanceError) throw balanceError;
-
-      await supabase.from('transactions').insert({
-        user_id: currentUser.id,
-        type: 'bonus',
-        amount: gift.amount,
-        status: 'completed',
-        description: `Gift code redeemed: ${gift.code}${gift.note ? ` - ${gift.note}` : ''}`,
-      });
-
-      toast.success(`Gift code redeemed! +${formatUGX(gift.amount)}`);
+      const nextBalance = Number(currentUser.balance || 0) + Number(result.amount || 0);
+      setCurrentUser({ ...currentUser, balance: nextBalance });
+      toast.success(result.message || `Gift code redeemed! +${formatUGX(result.amount || 0)}`);
       setCode('');
-      setCurrentUser({ ...currentUser, balance: newBalance });
     } catch (error: any) {
       console.error(error);
       toast.error(error?.message || 'Redemption failed');
