@@ -16,6 +16,7 @@ export default function RegisterPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // FIX FOR HASH ROUTER #/register?ref=CODE
   useEffect(() => {
     const hash = window.location.hash;
     if (hash.includes('ref=')) {
@@ -33,92 +34,59 @@ export default function RegisterPage() {
       toast.error('Please fill in all fields');
       return;
     }
-
     if (password !== confirm) {
       toast.error('Passwords do not match');
       return;
     }
-
     if (password.length < 6) {
       toast.error('Password must be at least 6 characters');
       return;
     }
 
     setLoading(true);
-
     try {
-      const cleanPhone = phone.trim();
-      const sanitizedPhone = cleanPhone.replace(/\D/g, '');
-      const generatedEmail = `${sanitizedPhone}@legend.local`;
-
-      const { data: existingUser, error: existingCheckError } = await supabase
-        .from('users')
-        .select('id')
-        .eq('phone', cleanPhone)
-        .maybeSingle();
-
-      if (existingCheckError) throw existingCheckError;
-      if (existingUser) {
+      // 1. Check if phone exists
+      const { data: exists } = await supabase.from('users').select('id').eq('phone', phone.trim()).single();
+      if (exists) {
         toast.error('Phone already registered');
+        setLoading(false);
         return;
       }
 
-      // 1) Create Supabase auth user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: generatedEmail,
-        password,
-      });
-
-      if (authError) throw authError;
-
-      if (!authData.user) {
-        throw new Error('Auth user was not created');
-      }
-
-      // 2) Find referrer if any
+      // 2. Find referrer by code - THIS CONNECTS REFERRAL TO DATABASE
       let referrerId = null;
       const cleanRef = refCode.trim().toUpperCase() || null;
-
       if (cleanRef) {
-        const { data: referrer, error: refError } = await supabase
-          .from('users')
-          .select('id')
-          .eq('referral_code', cleanRef)
-          .maybeSingle();
-
-        if (refError) throw refError;
-        if (!referrer) {
+        const { data: referrer } = await supabase.from('users').select('id').eq('referral_code', cleanRef).single();
+        if (referrer) {
+          referrerId = referrer.id;
+        } else {
           toast.error('Invalid referral code');
+          setLoading(false);
           return;
         }
-        referrerId = referrer.id;
       }
 
+      // 3. Generate unique referral code
       const newReferralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-      // 3) Insert user record with same auth id
-      const { data, error } = await supabase
-        .from('users')
-        .insert({
-          id: authData.user.id,
-          phone: cleanPhone,
-          email: generatedEmail,
-          password,
-          name: fullName.trim(),
-          referral_code: newReferralCode,
-          referred_by: referrerId,
-          referrer_id: referrerId,
-          referred_by_code: cleanRef,
-          balance: 9000,
-          is_banned: false,
-          is_admin: false,
-        })
-        .select()
-        .single();
+      // 4. Insert into Supabase - referral columns now exist (you ran ALTER TABLE)
+      const { data, error } = await supabase.from('users').insert({
+        phone: phone.trim(),
+        password: password,
+        name: fullName.trim(),
+        referral_code: newReferralCode,
+        referred_by: referrerId,
+        referrer_id: referrerId,
+        referred_by_code: cleanRef,
+        balance: 9000,
+        is_banned: false,
+        is_admin: false
+      }).select().single();
 
       if (error) throw error;
 
-      // 4) Store local session state (optional)
+      // 5. SAVE SESSION - FIXES LOOP ON ALL DEVICES
       localStorage.setItem('phone', data.phone);
       localStorage.setItem('user_id', data.id);
       localStorage.setItem('user', JSON.stringify(data));
@@ -219,4 +187,4 @@ export default function RegisterPage() {
       <div className="h-8" />
     </div>
   );
-          }
+}
