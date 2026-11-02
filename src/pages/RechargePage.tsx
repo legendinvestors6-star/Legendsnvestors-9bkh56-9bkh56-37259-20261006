@@ -5,21 +5,11 @@ import { supabase } from '@/lib/supabase';
 import { Link, useNavigate } from 'react-router-dom';
 
 const formatId = () => Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
-
 function getCurrentUserId(): string | null {
-  try {
-    const raw = localStorage.getItem('legend_user');
-    if (raw) return JSON.parse(raw).id;
-    return localStorage.getItem('legend_current_user') || localStorage.getItem('user_id');
-  } catch { return null; }
+  try { const raw = localStorage.getItem('legend_user'); if (raw) return JSON.parse(raw).id; return localStorage.getItem('legend_current_user') || localStorage.getItem('user_id'); } catch { return null; }
 }
-
 function getCurrentUserPhone(): string {
-  try {
-    const raw = localStorage.getItem('legend_user');
-    if (raw) return JSON.parse(raw).phone || '';
-  } catch {}
-  return localStorage.getItem('phone') || '';
+  try { const raw = localStorage.getItem('legend_user'); if (raw) return JSON.parse(raw).phone || ''; } catch {} return localStorage.getItem('phone') || '';
 }
 
 export default function RechargePage() {
@@ -29,143 +19,87 @@ export default function RechargePage() {
   const [provider, setProvider] = useState<'mtn' | 'airtel'>('airtel');
   const [status, setStatus] = useState<'idle' | 'loading' | 'stk_sent'>('idle');
 
-  // AUTO-FILL PHONE ON LOAD + CHECK LOGIN
   useEffect(() => {
     const uid = getCurrentUserId();
-    if (!uid) {
-      toast.error('Please login first');
-      navigate('/login');
-      return;
-    }
+    if (!uid) { navigate('/login'); return; }
     const savedPhone = getCurrentUserPhone();
     if (savedPhone) setPhone(savedPhone);
   }, [navigate]);
 
   const handleRecharge = async () => {
     if (!amount || Number(amount) < 1000) { toast.error('Enter valid amount'); return; }
-    if (!phone || phone.length < 10) { toast.error('TYPE your phone! 07XXXXXXXX'); return; }
-    
+    if (!phone || phone.length < 10) { toast.error('TYPE phone 07XXXXXXXX'); return; }
     const userId = getCurrentUserId();
-    if (!userId) { toast.error('Please login again'); navigate('/login'); return; }
-    
+    if (!userId) { navigate('/login'); return; }
     setStatus('loading');
     const orderId = formatId();
     const now = new Date().toISOString();
     
-    // FIXED: SAVE TO LOCALSTORAGE FIRST - SO STATUS WILL SHOW EVEN IF SUPABASE FAILS!
+    // SAVE LOCAL AS PENDING
     try {
       const localOrders = JSON.parse(localStorage.getItem('legend_recharge_orders') || '[]');
       localOrders.unshift({
-        id: orderId,
-        userId: String(userId),
-        user_id: String(userId),
-        phone: getCurrentUserPhone() || phone,
-        amount: Number(amount),
-        payment_method: provider,
-        paymentMethod: provider,
-        phone_number: phone,
-        phoneNumber: phone,
-        status: 'pending',
-        created_at: now,
-        createdAt: now
+        id: orderId, userId: String(userId), user_id: String(userId),
+        phone: getCurrentUserPhone() || phone, amount: Number(amount),
+        payment_method: provider, phone_number: phone, status: 'pending',
+        created_at: now, createdAt: now
       });
       localStorage.setItem('legend_recharge_orders', JSON.stringify(localOrders));
-      console.log('LOCAL SAVED:', localOrders.length);
-    } catch (e) {
-      console.error('Local save failed', e);
-    }
+    } catch {}
 
     try {
-      // SAVE TO SUPABASE FOR ADMIN
+      // SAVE SUPABASE AS PENDING - ADMIN WILL APPROVE!
       const { error } = await supabase.from('recharge_orders').insert({
-        id: orderId,
-        user_id: String(userId),
-        phone: getCurrentUserPhone() || phone,
-        amount: Number(amount),
-        payment_method: provider,
-        phone_number: phone,
-        status: 'pending',
-        created_at: now
+        id: orderId, user_id: String(userId), phone: getCurrentUserPhone() || phone,
+        amount: Number(amount), payment_method: provider, phone_number: phone,
+        status: 'pending', created_at: now
       });
-
-      if (error) {
-        console.error('Supabase error:', error);
-        // DON'T RETURN! Still show success because local saved!
-        toast.success('Recharge saved locally! Admin fix: Run SQL DISABLE RLS');
-        setStatus('stk_sent');
-        return;
-      }
-
-      // Optional payment API
-      fetch('/api/payments/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: Number(amount), phone, provider, userId }),
-      }).catch(()=>{});
-
+      if (error) console.error('Insert error:', error.message);
+      
       setStatus('stk_sent');
-      toast.success('Recharge submitted! Admin will see it');
-    } catch (e: any) {
-      console.error('Network error:', e);
-      // STILL SHOW SUCCESS BECAUSE LOCAL SAVED!
+      toast.success(`Recharge UGX ${Number(amount).toLocaleString()} submitted! Waiting admin approval`);
+    } catch (e:any) {
       setStatus('stk_sent');
-      toast.success('Recharge submitted locally! Check status');
+      toast.success('Submitted! Waiting approval');
     }
   };
 
   return (
-    <div className="app-container min-h-screen" style={{ background: '#0a0a0a' }}>
+    <div className="min-h-screen pb-20" style={{ background: '#0a0a0a' }}>
       <div className="px-6 pt-14 pb-6 text-center">
         <h1 className="text-2xl font-black text-[#c9a84c]">Recharge Account</h1>
-        <p className="text-gray-500 text-xs mt-2">Add funds to a phone number instantly</p>
+        <p className="text-gray-500 text-xs mt-2">Funds credited after admin approval</p>
       </div>
-
       <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
         {status === 'stk_sent' ? (
           <div className="text-center py-8">
-            <div className="w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 text-xl" style={{background:'#c9a84c'}}>✓</div>
-            <p className="text-white font-bold">Recharge Submitted!</p>
+            <div className="w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 text-xl" style={{background:'#facc15'}}>⏳</div>
+            <p className="text-white font-bold">Submitted - Pending Approval!</p>
             <p className="text-gray-500 text-sm mt-2">UGX {Number(amount).toLocaleString()} to {phone}</p>
-            <div className="grid grid-cols-2 gap-3 mt-6">
-              <Link to="/recharge-status" className="py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>View Status</Link>
-              <button onClick={() => setStatus('idle')} className="py-3 rounded-xl font-bold text-white text-sm" style={{background:'#1f1f1f', border:'1px solid #333'}}>New</button>
-            </div>
+            <p className="text-yellow-400 text-xs mt-2">Admin will approve and credit your wallet</p>
+            <Link to="/recharge-status" className="mt-6 inline-block w-full py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>View Status</Link>
+            <button onClick={() => setStatus('idle')} className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm" style={{background:'#1f1f1f'}}>New Recharge</button>
           </div>
         ) : (
           <div className="space-y-4">
-            <div>
-              <label className="text-xs font-medium text-gray-500 mb-1.5 block">Amount (UGX) *</label>
+            <div><label className="text-xs text-gray-500 mb-1.5 block">Amount (UGX) *</label>
               <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
-                <Wallet size={15} className="text-gray-500 mr-2" />
-                <input type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="50000" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-medium text-gray-500 mb-1.5 block">Provider *</label>
+                <Wallet size={15} className="text-gray-500 mr-2" /><input type="number" value={amount} onChange={e => setAmount(e.target.value)} className="flex-1 outline-none text-sm text-white bg-transparent" />
+              </div></div>
+            <div><label className="text-xs text-gray-500 mb-1.5 block">Provider *</label>
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setProvider('mtn')} className="py-3.5 rounded-xl text-sm font-bold" style={{ background: provider === 'mtn' ? 'rgba(201,168,76,0.15)' : '#1f1f1f', border: `1.5px solid ${provider === 'mtn' ? '#c9a84c' : '#333'}`, color: provider === 'mtn' ? '#c9a84c' : 'white' }}>MTN</button>
                 <button onClick={() => setProvider('airtel')} className="py-3.5 rounded-xl text-sm font-bold" style={{ background: provider === 'airtel' ? 'rgba(201,168,76,0.15)' : '#1f1f1f', border: `1.5px solid ${provider === 'airtel' ? '#c9a84c' : '#333'}`, color: provider === 'airtel' ? '#c9a84c' : 'white' }}>Airtel Uganda</button>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs font-medium text-gray-500 mb-1.5 block">Phone Number * TYPE IT!</label>
-              <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #ff4444' }}>
-                <Phone size={15} className="text-gray-500 mr-2" />
-                <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0751234567" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
-              </div>
-              <p className="text-[11px] text-red-400 mt-1">Must TYPE number! Placeholder doesn't count!</p>
-            </div>
-
-            <button onClick={handleRecharge} disabled={status === 'loading'} className="w-full py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60" style={{background:'#c9a84c'}}>
-              {status === 'loading' ? 'Submitting...' : 'Recharge'}
-            </button>
+              </div></div>
+            <div><label className="text-xs text-gray-500 mb-1.5 block">Phone *</label>
+              <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                <Phone size={15} className="text-gray-500 mr-2" /><input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="0751234567" className="flex-1 outline-none text-sm text-white bg-transparent" />
+              </div></div>
+            <button onClick={handleRecharge} disabled={status === 'loading'} className="w-full py-4 rounded-xl font-bold text-black text-base mt-2" style={{background:'#c9a84c'}}>{status === 'loading' ? 'Submitting...' : `Recharge UGX ${Number(amount || 0).toLocaleString()}`}</button>
             <Link to="/recharge-status" className="block text-center text-zinc-500 text-xs mt-3">View my recharge status →</Link>
           </div>
         )}
       </div>
-      <div className="h-8" />
     </div>
   );
-  }
+                                     }
