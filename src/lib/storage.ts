@@ -41,7 +41,21 @@ function initAdmin() {
   }
 }
 
-export function getUsers(): User[] { return safeParse<User[]>(localStorage.getItem(KEYS.USERS), []); }
+export function getUsers(): User[] {
+  const users = safeParse<User[]>(localStorage.getItem(KEYS.USERS), []);
+  if (users.length === 0) {
+    try {
+      const raw = localStorage.getItem('legend_user');
+      if (raw) {
+        const u = JSON.parse(raw) as any;
+        if (u?.id) {
+          return [{ id: u.id, phone: u.phone, password: u.password || '', balance: Number(u.balance || 0), cumulativeIncome: Number(u.cumulativeIncome || 0) || 0, level: u.level || 1, referralCode: u.referral_code || u.referralCode || '', referredBy: u.referred_by || u.referredBy || undefined, checkInDays: u.checkInDays || 0, lastCheckIn: u.lastCheckIn || undefined, createdAt: u.created_at || new Date().toISOString(), isAdmin: u.phone === ADMIN_PHONE || u.is_admin || u.isAdmin || false, bankCard: u.bankCard || null } as User];
+        }
+      }
+    } catch {}
+  }
+  return users;
+}
 export function saveUsers(users: User[]): void { localStorage.setItem(KEYS.USERS, JSON.stringify(users)); }
 
 export function getCurrentUser(): User | null {
@@ -50,9 +64,7 @@ export function getCurrentUser(): User | null {
     if (supaRaw) {
       const u: any = JSON.parse(supaRaw);
       if (!u || !u.id) return null;
-      return {
-        id: u.id, phone: u.phone, password: u.password || '', balance: Number(u.balance || 0), cumulativeIncome: Number(u.cumulativeIncome || 0) || 0, level: u.level || 1, referralCode: u.referral_code || u.referralCode || '', referredBy: u.referred_by || u.referredBy || undefined, checkInDays: u.checkInDays || 0, lastCheckIn: u.lastCheckIn || undefined, createdAt: u.created_at || new Date().toISOString(), isAdmin: u.phone === ADMIN_PHONE || u.is_admin || u.isAdmin || false, bankCard: u.bankCard || null,
-      } as User;
+      return { id: u.id, phone: u.phone, password: u.password || '', balance: Number(u.balance || 0), cumulativeIncome: Number(u.cumulativeIncome || 0) || 0, level: u.level || 1, referralCode: u.referral_code || u.referralCode || '', referredBy: u.referred_by || u.referredBy || undefined, checkInDays: u.checkInDays || 0, lastCheckIn: u.lastCheckIn || undefined, createdAt: u.created_at || new Date().toISOString(), isAdmin: u.phone === ADMIN_PHONE || u.is_admin || u.isAdmin || false, bankCard: u.bankCard || null } as User;
     }
     const id = localStorage.getItem(KEYS.CURRENT_USER);
     if (!id) return null;
@@ -72,16 +84,33 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
     if (raw) {
       const u = JSON.parse(raw) as any;
       if (u.id === userId) {
-        const updated = { ...u, ...updates, balance: (updates as any).balance ?? u.balance } as any;
+        const updated = { ...u, ...updates, balance: (updates as any).balance ?? u.balance, checkInDays: (updates as any).checkInDays ?? u.checkInDays, cumulativeIncome: (updates as any).cumulativeIncome ?? u.cumulativeIncome, lastCheckIn: (updates as any).lastCheckIn ?? u.lastCheckIn } as any;
         if ((updates as any).referralCode) updated.referral_code = (updates as any).referralCode;
-        if ((updates as any).lastCheckIn) updated.lastCheckIn = (updates as any).lastCheckIn;
-        if ((updates as any).checkInDays !== undefined) updated.checkInDays = (updates as any).checkInDays;
-        if ((updates as any).cumulativeIncome !== undefined) updated.cumulativeIncome = (updates as any).cumulativeIncome;
         localStorage.setItem('legend_user', JSON.stringify(updated));
+        // Also make sure users list has this user
+        let users = safeParse<User[]>(localStorage.getItem(KEYS.USERS), []);
+        const idx = users.findIndex(x => x.id === userId);
+        if (idx === -1) { users.push(updated as any); } else { users[idx] = { ...users[idx], ...updates } as any; }
+        saveUsers(users);
+        return updated as any;
       }
     }
   } catch {}
-  const users = getUsers(); const idx = users.findIndex(u => u.id === userId); if (idx === -1) return null; users[idx] = { ...users[idx], ...updates }; saveUsers(users); return users[idx];
+  const users = getUsers();
+  const idx = users.findIndex(u => u.id === userId);
+  if (idx === -1) {
+    // If not in list but we have current user, create it
+    const cur = getCurrentUser();
+    if (cur && cur.id === userId) {
+      const merged = { ...cur, ...updates } as User;
+      saveUsers([...users, merged]);
+      return merged;
+    }
+    return null;
+  }
+  users[idx] = { ...users[idx], ...updates };
+  saveUsers(users);
+  return users[idx];
 }
 
 export function formatUGX(amount: number): string { try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; } }
@@ -119,19 +148,37 @@ export function saveUserProducts(products: UserProduct[]): void { localStorage.s
 
 export function creditDailyIncome(userId: string): { credited: number } {
   try {
-    const user = getUsers().find(u => u.id === userId); if (!user) return { credited: 0 }; const products = getUserProducts(userId).filter(p => p.status === 'active'); if (!products.length) return { credited: 0 };
+    const user = getUsers().find(u => u.id === userId) || getCurrentUser(); if (!user || (user as any).id !== userId) return { credited: 0 }; const products = getUserProducts(userId).filter(p => p.status === 'active'); if (!products.length) return { credited: 0 };
     const dailySum = products.reduce((s, p) => s + ((p as any).dailyIncome || 0), 0); if (!dailySum) return { credited: 0 };
     const lastMap = safeParse<Record<string, number>>(localStorage.getItem(KEYS.LAST_DAILY_CREDIT), {}); const last = lastMap[userId] || 0; const now = Date.now(); const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime(); if (last >= startOfToday) return { credited: 0 };
     updateUser(userId, { balance: (user.balance || 0) + dailySum, cumulativeIncome: (user.cumulativeIncome || 0) + dailySum } as any); addTransaction({ userId, type: 'daily-income', amount: dailySum, status: 'completed', description: 'Daily product income' } as any); lastMap[userId] = now; localStorage.setItem(KEYS.LAST_DAILY_CREDIT, JSON.stringify(lastMap)); return { credited: dailySum };
   } catch { return { credited: 0 }; }
 }
 export function getNextPayoutMs(userId?: string): number { const now = new Date(); const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); return Math.max(0, next.getTime() - now.getTime()); }
+
 export function performCheckIn(userId: string): { success: boolean; reward?: number; message?: string } {
   try {
-    const user = getUsers().find(u => u.id === userId); if (!user) return { success: false, message: 'User not found' }; const today = new Date().toDateString(); if (user.lastCheckIn === today) return { success: false, message: 'Already checked in today' };
-    const reward = CHECKIN_REWARD || 300; const newCheckInDays = (user.checkInDays || 0) + 1; updateUser(userId, { balance: (user.balance || 0) + reward, cumulativeIncome: (user.cumulativeIncome || 0) + reward, lastCheckIn: today, checkInDays: newCheckInDays } as any); addTransaction({ userId, type: 'checkin', amount: reward, status: 'completed', description: 'Daily check-in reward' } as any); return { success: true, reward };
+    let user = getUsers().find(u => u.id === userId) || getCurrentUser();
+    if (!user || user.id !== userId) {
+      try {
+        const raw = localStorage.getItem('legend_user');
+        if (raw) {
+          const u = JSON.parse(raw) as any;
+          if (u?.id === userId) user = getCurrentUser();
+        }
+      } catch {}
+    }
+    if (!user) return { success: false, message: 'User not found' };
+    const today = new Date().toDateString();
+    if ((user as any).lastCheckIn === today) return { success: false, message: 'Already checked in today' };
+    const reward = CHECKIN_REWARD || 300;
+    const newCheckInDays = ((user as any).checkInDays || 0) + 1;
+    updateUser(userId, { balance: (user.balance || 0) + reward, cumulativeIncome: (user.cumulativeIncome || 0) + reward, lastCheckIn: today, checkInDays: newCheckInDays } as any);
+    addTransaction({ userId, type: 'checkin', amount: reward, status: 'completed', description: 'Daily check-in reward' } as any);
+    return { success: true, reward };
   } catch (e) { return { success: false, message: 'Check-in failed' }; }
 }
+
 export function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): { success: boolean; message: string } {
   const user = getUsers().find(u => u.id === userId) || getCurrentUser(); if (!user) return { success: false, message: 'User not found' }; if (user.balance < price) return { success: false, message: 'Insufficient balance' };
   updateUser(user.id, { balance: user.balance - price } as any); const products = getUserProducts(userId); const userProduct: UserProduct = { id: generateId(), userId, productId, price, dailyIncome, term, purchasedAt: new Date().toISOString(), status: 'active' } as any; saveUserProducts([userProduct, ...products]); addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId}` } as any); return { success: true, message: 'Product purchased successfully' };
@@ -146,7 +193,6 @@ export function rejectPasswordReset(id: string, note?: string): boolean { const 
 export function getTeamMembers(userId: string) { const users = getUsers(); const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId); const level1Ids = level1.map(u => u.id); const level2 = users.filter(u => level1Ids.includes(u.referredBy as any) || level1Ids.includes((u as any).referred_by)); const level2Ids = level2.map(u => u.id); const level3 = users.filter(u => level2Ids.includes(u.referredBy as any) || level2Ids.includes((u as any).referred_by)); return { level1, level2, level3 }; }
 export function getTeamCommissions(userId: string) { const { level1, level2, level3 } = getTeamMembers(userId); const sum = (arr: User[]) => arr.reduce((s, u) => s + (u.balance || 0), 0); const c1 = sum(level1) * (LEVEL1_RATE || 0.27); const c2 = sum(level2) * (LEVEL2_RATE || 0.02); const c3 = sum(level3) * (LEVEL3_RATE || 0.01); return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) }; }
 
-// --- FIX FOR LoginPage.tsx BUILD ERROR ---
 export const createPasswordReset = createPasswordResetRequest;
 export function getPasswordResetStatus(phone: string) {
   const reqs = getPasswordResets();
