@@ -16,7 +16,6 @@ export default function RegisterPage() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // FIX FOR HASH ROUTER #/register?ref=CODE
   useEffect(() => {
     const hash = window.location.hash;
     if (hash.includes('ref=')) {
@@ -45,19 +44,21 @@ export default function RegisterPage() {
 
     setLoading(true);
     try {
-      // 1. Check if phone exists
-      const { data: exists } = await supabase.from('users').select('id').eq('phone', phone.trim()).single();
+      const cleanPhone = phone.trim();
+      
+      // 1. Check if phone exists in Supabase
+      const { data: exists } = await supabase.from('users').select('id').eq('phone', cleanPhone).maybeSingle();
       if (exists) {
-        toast.error('Phone already registered');
+        toast.error('Phone already registered - try login');
         setLoading(false);
         return;
       }
 
-      // 2. Find referrer by code - THIS CONNECTS REFERRAL TO DATABASE
+      // 2. Find referrer
       let referrerId = null;
       const cleanRef = refCode.trim().toUpperCase() || null;
       if (cleanRef) {
-        const { data: referrer } = await supabase.from('users').select('id').eq('referral_code', cleanRef).single();
+        const { data: referrer } = await supabase.from('users').select('id').eq('referral_code', cleanRef).maybeSingle();
         if (referrer) {
           referrerId = referrer.id;
         } else {
@@ -67,35 +68,61 @@ export default function RegisterPage() {
         }
       }
 
-      // 3. Generate unique referral code
       const newReferralCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-      // 4. Insert into Supabase - referral columns now exist (you ran ALTER TABLE)
+      // 3. Insert to Supabase - FIXED columns
       const { data, error } = await supabase.from('users').insert({
-        phone: phone.trim(),
+        id: crypto.randomUUID(),
+        phone: cleanPhone,
         password: password,
         name: fullName.trim(),
         referral_code: newReferralCode,
         referred_by: referrerId,
         referrer_id: referrerId,
         referred_by_code: cleanRef,
-        balance: 9000,
+        balance: REGISTRATION_BONUS || 9000,
         is_banned: false,
-        is_admin: false
+        is_admin: false,
+        created_at: new Date().toISOString()
       }).select().single();
 
       if (error) throw error;
 
-      // 5. SAVE SESSION - FIXES LOOP ON ALL DEVICES
+      // 4. SAVE SESSION IN ALL FORMATS - FIX FOR ALL DEVICES!
+      const sessionUser = {
+        id: data.id,
+        phone: data.phone,
+        password: data.password,
+        name: data.name,
+        balance: Number(data.balance),
+        referral_code: data.referral_code,
+        referralCode: data.referral_code,
+        referred_by: data.referred_by,
+        created_at: data.created_at,
+        isAdmin: false,
+        is_admin: false
+      };
+
+      // New keys (your RegisterPage)
       localStorage.setItem('phone', data.phone);
       localStorage.setItem('user_id', data.id);
-      localStorage.setItem('user', JSON.stringify(data));
+      localStorage.setItem('user', JSON.stringify(sessionUser));
       localStorage.setItem('isLoggedIn', 'true');
+      
+      // Old keys (other pages need these!)
+      localStorage.setItem('legend_user', JSON.stringify(sessionUser));
+      localStorage.setItem('legend_current_user', data.id);
+      
+      // For backward compatibility
+      const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
+      users.push(sessionUser);
+      localStorage.setItem('legend_users', JSON.stringify(users));
 
-      toast.success(`Welcome ${fullName}! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
+      toast.success(`Welcome ${fullName}! You received UGX ${(REGISTRATION_BONUS || 9000).toLocaleString()} bonus!`);
       navigate('/home');
     } catch (error: any) {
-      toast.error(error?.message || 'Registration failed');
+      console.error(error);
+      toast.error(error?.message || 'Registration failed - try different phone');
     } finally {
       setLoading(false);
     }
@@ -108,18 +135,18 @@ export default function RegisterPage() {
         <div className="relative z-10 text-center">
           <div className="flex items-center justify-center gap-3 mb-3">
             <div className="flex flex-col gap-1">
-              <div className="w-7 h-1.5 rounded-full gold-gradient" />
-              <div className="w-7 h-1.5 rounded-full gold-gradient" />
-              <div className="w-7 h-1.5 rounded-full gold-gradient" />
+              <div className="w-7 h-1.5 rounded-full" style={{background:'#c9a84c'}} />
+              <div className="w-7 h-1.5 rounded-full" style={{background:'#c9a84c'}} />
+              <div className="w-7 h-1.5 rounded-full" style={{background:'#c9a84c'}} />
             </div>
-            <h1 className="text-3xl font-black gold-gradient-text">LEGEND</h1>
+            <h1 className="text-3xl font-black" style={{color:'#c9a84c'}}>LEGEND</h1>
           </div>
           <p className="text-[#c9a84c] text-xs tracking-widest uppercase">Create Your Account</p>
         </div>
       </div>
 
       <div className="mx-4 mb-4 rounded-2xl p-3 flex items-center gap-3" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.3)' }}>
-        <div className="w-9 h-9 gold-gradient rounded-xl flex items-center justify-center">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{background:'#c9a84c'}}>
           <Gift size={18} className="text-black" />
         </div>
         <div>
@@ -174,7 +201,7 @@ export default function RegisterPage() {
             {refCode && <p className="text-[#c9a84c] text-[10px] mt-1">✓ Invited by {refCode}</p>}
           </div>
 
-          <button type="button" onClick={handleRegister} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base disabled:opacity-60">
+          <button type="button" onClick={handleRegister} disabled={loading} className="w-full py-4 rounded-xl font-bold text-black text-base disabled:opacity-60" style={{background:'#c9a84c'}}>
             {loading ? 'Creating account...' : 'Register & Claim Bonus'}
           </button>
 
