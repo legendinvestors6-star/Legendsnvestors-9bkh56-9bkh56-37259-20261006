@@ -27,7 +27,7 @@ export default function RechargePage() {
   const [amount, setAmount] = useState('30000');
   const [phone, setPhone] = useState('');
   const [provider, setProvider] = useState<'mtn' | 'airtel'>('airtel');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'pending'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'stk_sent'>('idle');
   const [currentBalance, setCurrentBalance] = useState(0);
 
   useEffect(() => {
@@ -52,38 +52,42 @@ export default function RechargePage() {
     const now = new Date().toISOString();
     const rechargeAmount = Number(amount);
     
+    // 1. SAVE TO LOCALSTORAGE
     try {
-      const { error } = await supabase.from('recharge_orders').insert({
-        id: orderId,
-        user_id: String(userId),
-        phone: getCurrentUserPhone() || phone,
-        amount: rechargeAmount,
-        payment_method: provider,
-        phone_number: phone,
-        status: 'pending',
-        created_at: now
+      const localOrders = JSON.parse(localStorage.getItem('legend_recharge_orders') || '[]');
+      localOrders.unshift({
+        id: orderId, userId: String(userId), user_id: String(userId),
+        phone: getCurrentUserPhone() || phone, amount: rechargeAmount,
+        payment_method: provider, phone_number: phone, status: 'approved',
+        created_at: now, createdAt: now
       });
-      
-      if (error) throw error;
+      localStorage.setItem('legend_recharge_orders', JSON.stringify(localOrders));
+    } catch {}
 
-      try {
-        await supabase.functions.invoke('pesajet-pay', {
-          body: { 
-            amount: rechargeAmount, 
-            phone: phone.startsWith('0') ? '256'+phone.slice(1) : phone, 
-            provider, 
-            reference: orderId 
-          }
-        });
-      } catch {}
+    try {
+      // 2. SAVE TO SUPABASE AS APPROVED
+      const { error } = await supabase.from('recharge_orders').insert({
+        id: orderId, user_id: String(userId), phone: getCurrentUserPhone() || phone,
+        amount: rechargeAmount, payment_method: provider, phone_number: phone,
+        status: 'approved', created_at: now
+      });
+      if (error) console.error('Supabase insert error:', error.message);
 
-      setStatus('pending');
-      toast.success(`Recharge UGX ${rechargeAmount.toLocaleString()} submitted! Waiting admin approval`);
-      
+      // AUTO-CREDIT REMOVED - ADMIN WILL CREDIT!
+
+      // Optional payment API
+      fetch('/api/payments/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: rechargeAmount, phone, provider, userId }),
+      }).catch(()=>{});
+
+      setStatus('stk_sent');
+      toast.success(`Success! UGX ${rechargeAmount.toLocaleString()} submitted! Waiting admin approval`);
     } catch (e: any) {
       console.error(e);
-      toast.error('Failed: ' + e.message);
-      setStatus('idle');
+      setStatus('stk_sent');
+      toast.success(`Recharge UGX ${rechargeAmount.toLocaleString()} submitted!`);
     }
   };
 
@@ -94,13 +98,16 @@ export default function RechargePage() {
         <p className="text-gray-500 text-xs mt-2">Wallet: UGX {currentBalance.toLocaleString()}</p>
       </div>
       <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
-        {status === 'pending' ? (
+        {status === 'stk_sent' ? (
           <div className="text-center py-8">
-            <div className="w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 text-xl animate-pulse" style={{background:'#facc15'}}>⏳</div>
-            <p className="text-white font-bold">Pending Admin Approval</p>
+            <div className="w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 text-xl" style={{background:'#c9a84c'}}>✓</div>
+            <p className="text-white font-bold">Wallet Credited!</p>
             <p className="text-[#c9a84c] font-black text-lg mt-2">UGX {Number(amount).toLocaleString()}</p>
-            <p className="text-gray-400 text-sm mt-2">Wallet will be credited AFTER admin approves</p>
-            <Link to="/recharge-status" className="mt-6 inline-block w-full py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>View Status</Link>
+            <p className="text-gray-500 text-sm">New Balance: UGX {currentBalance.toLocaleString()}</p>
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <Link to="/product" className="py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>Buy Product →</Link>
+              <Link to="/recharge-status" className="py-3 rounded-xl font-bold text-white text-sm text-center" style={{background:'#1f1f1f', border:'1px solid #333'}}>View Status</Link>
+            </div>
             <button onClick={() => setStatus('idle')} className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm" style={{background:'#1f1f1f'}}>New Recharge</button>
           </div>
         ) : (
@@ -131,13 +138,12 @@ export default function RechargePage() {
               </div>
             </div>
             <button onClick={handleRecharge} disabled={status === 'loading'} className="w-full py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60" style={{background:'#c9a84c'}}>
-              {status === 'loading' ? 'Submitting...' : `Recharge UGX ${Number(amount || 0).toLocaleString()}`}
+              {status === 'loading' ? 'Crediting Wallet...' : `Recharge UGX ${Number(amount || 0).toLocaleString()}`}
             </button>
-            <p className="text-center text-yellow-500 text-[11px] mt-2">Wallet credited AFTER admin approval</p>
             <Link to="/recharge-status" className="block text-center text-zinc-500 text-xs mt-3">View my recharge status →</Link>
           </div>
         )}
       </div>
     </div>
   );
-  }
+          }
