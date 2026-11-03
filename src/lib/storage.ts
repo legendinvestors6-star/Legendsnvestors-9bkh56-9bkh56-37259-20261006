@@ -87,7 +87,6 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
         const updated = { ...u, ...updates, balance: (updates as any).balance ?? u.balance, checkInDays: (updates as any).checkInDays ?? u.checkInDays, cumulativeIncome: (updates as any).cumulativeIncome ?? u.cumulativeIncome, lastCheckIn: (updates as any).lastCheckIn ?? u.lastCheckIn } as any;
         if ((updates as any).referralCode) updated.referral_code = (updates as any).referralCode;
         localStorage.setItem('legend_user', JSON.stringify(updated));
-        // Also make sure users list has this user
         let users = safeParse<User[]>(localStorage.getItem(KEYS.USERS), []);
         const idx = users.findIndex(x => x.id === userId);
         if (idx === -1) { users.push(updated as any); } else { users[idx] = { ...users[idx], ...updates } as any; }
@@ -99,7 +98,6 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) {
-    // If not in list but we have current user, create it
     const cur = getCurrentUser();
     if (cur && cur.id === userId) {
       const merged = { ...cur, ...updates } as User;
@@ -115,12 +113,37 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
 
 export function formatUGX(amount: number): string { try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; } }
 
+// FIXED: 9000 BONUS IMMEDIATELY ON REGISTER
 export function registerUser(phone: string, password: string, referralCode?: string): { success: boolean; message: string; user?: User } {
-  initAdmin(); const users = getUsers(); if (users.find(u => u.phone === phone)) return { success: false, message: 'Phone number already registered' };
-  let referredBy: string | undefined; if (referralCode) { const referrer = users.find(u => u.referralCode === referralCode.toUpperCase()); if (referrer) referredBy = referrer.id; }
-  const newUser: User = { id: generateId(), phone, password, balance: REGISTRATION_BONUS || 0, cumulativeIncome: 0, level: 1, referralCode: generateReferralCode(), referredBy, checkInDays: 0, createdAt: new Date().toISOString(), isAdmin: false } as any;
-  saveUsers([...users, newUser]); addTransaction({ userId: newUser.id, type: 'bonus', amount: REGISTRATION_BONUS || 0, status: 'completed', description: 'Registration bonus reward' } as any);
-  return { success: true, message: 'Registration successful', user: newUser };
+  initAdmin(); 
+  const users = getUsers(); 
+  if (users.find(u => u.phone === phone)) return { success: false, message: 'Phone number already registered' };
+  let referredBy: string | undefined; 
+  if (referralCode) { const referrer = users.find(u => u.referralCode === referralCode.toUpperCase()); if (referrer) referredBy = referrer.id; }
+  
+  const BONUS = 9000; // FIXED 9000 BONUS
+  
+  const newUser: User = { 
+    id: generateId(), 
+    phone, 
+    password, 
+    balance: BONUS, // 9000 immediately
+    cumulativeIncome: 0, 
+    level: 1, 
+    referralCode: generateReferralCode(), 
+    referredBy, 
+    checkInDays: 0, 
+    createdAt: new Date().toISOString(), 
+    isAdmin: false 
+  } as any;
+  
+  saveUsers([...users, newUser]); 
+  addTransaction({ userId: newUser.id, type: 'bonus', amount: BONUS, status: 'completed', description: 'Registration bonus - UGX 9,000' } as any);
+  
+  // Also set current user immediately
+  setCurrentUser(newUser);
+  
+  return { success: true, message: 'Registration successful - UGX 9,000 bonus credited!', user: newUser };
 }
 
 export function loginUser(phone: string, password: string): { success: boolean; message: string; user?: User } {
@@ -143,18 +166,108 @@ export function createWithdrawOrder(userId: string, amount: number): { success: 
 export function approveWithdrawOrder(orderId: string): boolean { const orders = getWithdrawOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'completed' as any; localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify(orders)); return true; }
 export function rejectWithdrawOrder(orderId: string): boolean { const orders = getWithdrawOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; const order = orders[idx]; orders.splice(idx, 1); localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify(orders)); updateUser(order.userId, { balance: ((getUsers().find(u=>u.id===order.userId)?.balance||0) + order.amount) } as any); return true; }
 
-export function getUserProducts(userId?: string): UserProduct[] { return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); }
+export function getUserProducts(userId?: string): UserProduct[] { 
+  // Auto credit daily income check every time we get products
+  if (userId) creditDailyIncome(userId);
+  return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); 
+}
 export function saveUserProducts(products: UserProduct[]): void { localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify(products)); }
 
+// FIXED: DAILY INCOME AFTER 24 HOURS, NOT IMMEDIATELY!
 export function creditDailyIncome(userId: string): { credited: number } {
   try {
-    const user = getUsers().find(u => u.id === userId) || getCurrentUser(); if (!user || (user as any).id !== userId) return { credited: 0 }; const products = getUserProducts(userId).filter(p => p.status === 'active'); if (!products.length) return { credited: 0 };
-    const dailySum = products.reduce((s, p) => s + ((p as any).dailyIncome || 0), 0); if (!dailySum) return { credited: 0 };
-    const lastMap = safeParse<Record<string, number>>(localStorage.getItem(KEYS.LAST_DAILY_CREDIT), {}); const last = lastMap[userId] || 0; const now = Date.now(); const startOfToday = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime(); if (last >= startOfToday) return { credited: 0 };
-    updateUser(userId, { balance: (user.balance || 0) + dailySum, cumulativeIncome: (user.cumulativeIncome || 0) + dailySum } as any); addTransaction({ userId, type: 'daily-income', amount: dailySum, status: 'completed', description: 'Daily product income' } as any); lastMap[userId] = now; localStorage.setItem(KEYS.LAST_DAILY_CREDIT, JSON.stringify(lastMap)); return { credited: dailySum };
-  } catch { return { credited: 0 }; }
+    const user = getUsers().find(u => u.id === userId) || getCurrentUser(); 
+    if (!user || (user as any).id !== userId) return { credited: 0 }; 
+    
+    const allProducts = safeParse<any[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []);
+    const products = allProducts.filter(p => p.userId === userId && p.status === 'active');
+    if (!products.length) return { credited: 0 };
+
+    const now = Date.now();
+    let totalToCredit = 0;
+    let updated = false;
+
+    for (const p of products) {
+      // For each product, check if 24hrs passed since last income or purchase
+      const purchaseTime = new Date(p.purchasedAt || p.purchaseDate || p.createdAt).getTime();
+      const lastCreditTime = p.lastIncomeAt ? new Date(p.lastIncomeAt).getTime() : purchaseTime;
+      const nextIncomeTime = lastCreditTime + 24*60*60*1000; // +24 hours
+
+      // If expired
+      const endTime = new Date(p.endDate || (purchaseTime + (p.term||30)*24*60*60*1000)).getTime();
+      if (now > endTime) {
+        p.status = 'expired';
+        updated = true;
+        continue;
+      }
+
+      // If 24hrs passed, credit income!
+      if (now >= nextIncomeTime) {
+        // Check how many days missed (if user didn't open app)
+        const daysMissed = Math.floor((now - lastCreditTime) / (24*60*60*1000));
+        const daysToPay = Math.min(daysMissed, 1); // Pay 1 day at a time to avoid abuse, or pay all missed
+        
+        // For simplicity, pay 1 day per check, but if missed multiple days, pay all missed
+        let incomeForThisProduct = 0;
+        for (let i = 0; i < daysMissed; i++) {
+          const checkTime = lastCreditTime + (i+1)*24*60*60*1000;
+          if (checkTime <= now && checkTime <= endTime) {
+            incomeForThisProduct += Number(p.dailyIncome || 0);
+            p.daysPaid = (p.daysPaid || 0) + 1;
+            p.totalEarned = (p.totalEarned || 0) + Number(p.dailyIncome || 0);
+          }
+        }
+
+        if (incomeForThisProduct > 0) {
+          totalToCredit += incomeForThisProduct;
+          p.lastIncomeAt = new Date(lastCreditTime + daysMissed*24*60*60*1000).toISOString();
+          p.nextIncomeAt = new Date(new Date(p.lastIncomeAt).getTime() + 24*60*60*1000).toISOString();
+          updated = true;
+        }
+      }
+    }
+
+    if (totalToCredit > 0) {
+      updateUser(userId, { 
+        balance: (user.balance || 0) + totalToCredit, 
+        cumulativeIncome: (user.cumulativeIncome || 0) + totalToCredit 
+      } as any); 
+      addTransaction({ 
+        userId, 
+        type: 'daily-income', 
+        amount: totalToCredit, 
+        status: 'completed', 
+        description: `Daily income - ${products.length} products - After 24hrs` 
+      } as any);
+      
+      if (updated) {
+        // Save updated products
+        const otherUsersProducts = allProducts.filter(p => p.userId !== userId);
+        localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify([...products, ...otherUsersProducts]));
+      }
+    }
+
+    return { credited: totalToCredit };
+  } catch (e) { 
+    console.error('creditDailyIncome error', e);
+    return { credited: 0 }; 
+  }
 }
-export function getNextPayoutMs(userId?: string): number { const now = new Date(); const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); return Math.max(0, next.getTime() - now.getTime()); }
+
+export function getNextPayoutMs(userId?: string): number { 
+  if (!userId) return 0;
+  const products = safeParse<any[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => p.userId === userId && p.status === 'active');
+  if (!products.length) return 0;
+  const now = Date.now();
+  let nextMs = Infinity;
+  for (const p of products) {
+    const last = p.lastIncomeAt ? new Date(p.lastIncomeAt).getTime() : new Date(p.purchasedAt || p.purchaseDate).getTime();
+    const next = last + 24*60*60*1000;
+    const remaining = next - now;
+    if (remaining > 0 && remaining < nextMs) nextMs = remaining;
+  }
+  return nextMs === Infinity ? 0 : nextMs;
+}
 
 export function performCheckIn(userId: string): { success: boolean; reward?: number; message?: string } {
   try {
@@ -179,10 +292,43 @@ export function performCheckIn(userId: string): { success: boolean; reward?: num
   } catch (e) { return { success: false, message: 'Check-in failed' }; }
 }
 
+// FIXED: PURCHASE - NO IMMEDIATE INCOME! FIRST INCOME AFTER 24HRS
 export function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): { success: boolean; message: string } {
-  const user = getUsers().find(u => u.id === userId) || getCurrentUser(); if (!user) return { success: false, message: 'User not found' }; if (user.balance < price) return { success: false, message: 'Insufficient balance' };
-  updateUser(user.id, { balance: user.balance - price } as any); const products = getUserProducts(userId); const userProduct: UserProduct = { id: generateId(), userId, productId, price, dailyIncome, term, purchasedAt: new Date().toISOString(), status: 'active' } as any; saveUserProducts([userProduct, ...products]); addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId}` } as any); return { success: true, message: 'Product purchased successfully' };
+  const user = getUsers().find(u => u.id === userId) || getCurrentUser(); 
+  if (!user) return { success: false, message: 'User not found' }; 
+  if (user.balance < price) return { success: false, message: 'Insufficient balance' };
+  
+  // Deduct only price, no income yet
+  updateUser(user.id, { balance: user.balance - price } as any); 
+  
+  const now = new Date();
+  const endDate = new Date(now.getTime() + term * 24 * 60 * 60 * 1000);
+  const nextIncomeAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // First income after 24hrs!
+
+  const products = getUserProducts(userId); 
+  const userProduct: any = { 
+    id: generateId(), 
+    userId, 
+    productId, 
+    price, 
+    dailyIncome, 
+    term, 
+    purchasedAt: now.toISOString(),
+    purchaseDate: now.toISOString(), // For countdown
+    endDate: endDate.toISOString(),
+    nextIncomeAt: nextIncomeAt.toISOString(), // KEY!
+    lastIncomeAt: null,
+    totalEarned: 0,
+    daysPaid: 0,
+    status: 'active' 
+  }; 
+  
+  saveUserProducts([userProduct, ...safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), [])]); 
+  addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId} - First income after 24hrs` } as any); 
+  
+  return { success: true, message: `Product purchased! First daily income UGX ${dailyIncome.toLocaleString()} will come after 24 hours automatically every day!` };
 }
+
 export function getGiftCodes(): GiftCode[] { return safeParse<GiftCode[]>(localStorage.getItem(KEYS.GIFT_CODES), []); }
 export function createGiftCode(amount: number, note?: string, expiresAt?: string): GiftCode { const codes = getGiftCodes(); const codeObj: GiftCode = { id: generateId(), code: generateReferralCode(), amount, createdAt: new Date().toISOString(), note: note || '', expiresAt } as any; localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify([codeObj, ...codes])); return codeObj; }
 export function deleteGiftCode(id: string): boolean { const codes = getGiftCodes(); const idx = codes.findIndex(c => c.id === id); if (idx === -1) return false; codes.splice(idx, 1); localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes)); return true; }
