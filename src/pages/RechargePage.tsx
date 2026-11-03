@@ -28,7 +28,7 @@ export default function RechargePage() {
       const raw = localStorage.getItem('legend_user');
       if (raw) {
         const u = JSON.parse(raw);
-        setCurrentBalance(u.balance || 0);
+        setCurrentBalance(u.balance || 9000);
         if (u.phone) setPhone(u.phone);
       }
     } catch {}
