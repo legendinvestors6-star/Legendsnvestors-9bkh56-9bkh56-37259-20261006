@@ -116,3 +116,4 @@ export default function AdminPanel({ onLogout }: { onLogout: () => void }) {
     </div>
   );
 }
+ 
