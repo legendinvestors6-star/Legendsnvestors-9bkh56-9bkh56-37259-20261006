@@ -42,10 +42,54 @@ export default function HomePage() {
 
   useEffect(() => {
     const load = async () => {
-      const user = getCurrentUser();
+      let user = getCurrentUser();
       if (!user) {
         navigate('/login');
         return;
+      }
+
+      // FIX 0 BALANCE BUG - Auto give 9000 bonus if balance is 0
+      if (user.balance === 0 || user.balance === null || user.balance === undefined) {
+        console.log('Fixing 0 balance -> 9000 bonus');
+        const fixedUser = { ...user, balance: 9000 };
+        
+        // Fix legend_user
+        localStorage.setItem('legend_user', JSON.stringify(fixedUser));
+        
+        // Fix legend_users list
+        try {
+          const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
+          const idx = users.findIndex((u:any) => u.id === user.id);
+          if (idx !== -1) {
+            users[idx].balance = 9000;
+            localStorage.setItem('legend_users', JSON.stringify(users));
+          } else {
+            users.push(fixedUser);
+            localStorage.setItem('legend_users', JSON.stringify(users));
+          }
+        } catch {}
+
+        // Add bonus transaction if not exists
+        try {
+          const txKey = 'legend_transactions';
+          const txs = JSON.parse(localStorage.getItem(txKey) || '[]');
+          const hasBonus = txs.some((t:any) => t.userId === user.id && t.type === 'bonus');
+          if (!hasBonus) {
+            const bonusTx = {
+              id: Math.random().toString(36).slice(2,11) + Date.now().toString(36),
+              userId: user.id,
+              type: 'bonus',
+              amount: 9000,
+              status: 'completed',
+              description: 'Registration bonus - UGX 9,000',
+              createdAt: new Date().toISOString()
+            };
+            localStorage.setItem(txKey, JSON.stringify([bonusTx, ...txs]));
+          }
+        } catch {}
+
+        user = fixedUser;
+        toast.success('Welcome bonus credited: UGX 9,000!');
       }
 
       if (prevBalanceRef.current === null) {
@@ -78,20 +122,26 @@ export default function HomePage() {
 
         const fresh = getCurrentUser();
         setCurrentUser(fresh);
+        setNextPayoutMs(getNextPayoutMs(fresh?.id || user.id));
       } catch (error) {
         console.error('HomePage load error:', error);
       }
-
-      setNextPayoutMs(getNextPayoutMs(user.id));
     };
 
     load();
   }, [navigate]);
 
+  // LIVE COUNTDOWN TIMER - Updates every second
   useEffect(() => {
     const user = getCurrentUser();
-    if (user) setNextPayoutMs(getNextPayoutMs(user.id));
-  }, []);
+    if (!user) return;
+    
+    const interval = setInterval(() => {
+      setNextPayoutMs(getNextPayoutMs(user.id));
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [userProducts]);
 
   if (!currentUser) {
     return null;
@@ -153,6 +203,7 @@ export default function HomePage() {
             ) : (
               <div className="px-3 py-1.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(201,168,76,0.3)' }}>
                 <p className="text-[#c9a84c] font-black text-base tabular-nums">{formatCountdown(nextPayoutMs)}</p>
+                <p className="text-[9px] text-gray-500 text-center">after 24hrs</p>
               </div>
             )}
           </div>
@@ -259,4 +310,4 @@ export default function HomePage() {
       <div className="h-4" />
     </AppLayout>
   );
-}
+      }
