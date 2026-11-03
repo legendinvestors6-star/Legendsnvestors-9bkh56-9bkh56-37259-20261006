@@ -53,7 +53,6 @@ export default function RechargePage() {
     const rechargeAmount = Number(amount);
     
     try {
-      // SAVE AS PENDING - ADMIN WILL APPROVE AND CREDIT!
       const { error } = await supabase.from('recharge_orders').insert({
         id: orderId,
         user_id: String(userId),
@@ -65,32 +64,26 @@ export default function RechargePage() {
         created_at: now
       });
       
-      if (error) {
-        console.error('Supabase insert error:', error.message);
-        // Save locally as backup pending
-        try {
-          const localOrders = JSON.parse(localStorage.getItem('legend_recharge_orders') || '[]');
-          localOrders.unshift({
-            id: orderId, user_id: String(userId), phone: getCurrentUserPhone() || phone,
-            amount: rechargeAmount, payment_method: provider, phone_number: phone,
-            status: 'pending', created_at: now
-          });
-          localStorage.setItem('legend_recharge_orders', JSON.stringify(localOrders));
-        } catch {}
-      }
+      if (error) throw error;
 
-      // Trigger Pesajet PIN if you use Pesajet (optional)
-      supabase.functions.invoke('pesajet-pay', {
-        body: { amount: rechargeAmount, phone: phone.startsWith('0') ? '256'+phone.slice(1) : phone, provider, reference: orderId }
-      }).catch(()=>{});
+      try {
+        await supabase.functions.invoke('pesajet-pay', {
+          body: { 
+            amount: rechargeAmount, 
+            phone: phone.startsWith('0') ? '256'+phone.slice(1) : phone, 
+            provider, 
+            reference: orderId 
+          }
+        });
+      } catch {}
 
       setStatus('pending');
-      toast.success(`Recharge UGX ${rechargeAmount.toLocaleString()} submitted! Waiting for admin approval`);
+      toast.success(`Recharge UGX ${rechargeAmount.toLocaleString()} submitted! Waiting admin approval`);
       
     } catch (e: any) {
       console.error(e);
-      setStatus('idle');
       toast.error('Failed: ' + e.message);
+      setStatus('idle');
     }
   };
 
@@ -106,12 +99,8 @@ export default function RechargePage() {
             <div className="w-16 h-16 mx-auto rounded-full flex items-center justify-center mb-4 text-xl animate-pulse" style={{background:'#facc15'}}>⏳</div>
             <p className="text-white font-bold">Pending Admin Approval</p>
             <p className="text-[#c9a84c] font-black text-lg mt-2">UGX {Number(amount).toLocaleString()}</p>
-            <p className="text-gray-500 text-sm mt-2">Your wallet will be credited AFTER admin approves</p>
-            <p className="text-yellow-400 text-xs mt-3">Check phone for Pesajet PIN if using Pesajet</p>
-            <div className="grid grid-cols-2 gap-3 mt-6">
-              <Link to="/product" className="py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>Browse Products</Link>
-              <Link to="/recharge-status" className="py-3 rounded-xl font-bold text-white text-sm text-center" style={{background:'#1f1f1f', border:'1px solid #333'}}>View Status</Link>
-            </div>
+            <p className="text-gray-400 text-sm mt-2">Wallet will be credited AFTER admin approves</p>
+            <Link to="/recharge-status" className="mt-6 inline-block w-full py-3 rounded-xl font-bold text-black text-sm text-center" style={{background:'#c9a84c'}}>View Status</Link>
             <button onClick={() => setStatus('idle')} className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm" style={{background:'#1f1f1f'}}>New Recharge</button>
           </div>
         ) : (
@@ -144,11 +133,11 @@ export default function RechargePage() {
             <button onClick={handleRecharge} disabled={status === 'loading'} className="w-full py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60" style={{background:'#c9a84c'}}>
               {status === 'loading' ? 'Submitting...' : `Recharge UGX ${Number(amount || 0).toLocaleString()}`}
             </button>
-            <p className="text-center text-yellow-500 text-[11px]">Wallet credited AFTER admin approval</p>
+            <p className="text-center text-yellow-500 text-[11px] mt-2">Wallet credited AFTER admin approval</p>
             <Link to="/recharge-status" className="block text-center text-zinc-500 text-xs mt-3">View my recharge status →</Link>
           </div>
         )}
       </div>
     </div>
   );
-      }
+  }
