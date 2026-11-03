@@ -92,7 +92,7 @@ export default function LoginPage() {
           id: foundUser.id,
           phone: foundUser.phone,
           password: foundUser.password,
-          balance: Number(foundUser.balance || 0),
+          balance: Number(foundUser.balance || 9000),
           referral_code: foundUser.referral_code || foundUser.referralCode || '',
           referralCode: foundUser.referral_code || foundUser.referralCode || '',
           isAdmin: foundUser.is_admin || foundUser.isAdmin || false,
