@@ -2,16 +2,10 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShoppingBag, Clock, CheckCircle, XCircle, Timer } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
-import { getCurrentUser, getUserProducts, purchaseProduct, formatUGX } from '@/lib/storage';
+import { getCurrentUser, getUserProducts, purchaseProduct, formatUGX, getFreshBalanceFromSupabase } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import type { UserProduct } from '@/types';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  (import.meta as any).env?.VITE_SUPABASE_URL || '',
-  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
-);
 
 const BMW_IMAGES = [
   'https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?w=120&h=120&fit=crop',
@@ -79,78 +73,6 @@ function ActiveProductCard({ userProduct, productDef }: { userProduct: UserProdu
   );
 }
 
-// ===== ROBUST SYNC - Reads from MULTIPLE tables - Fixes RLS! =====
-async function getTrueBalance(userId: string, phone: string, localBalance: number): Promise<number> {
-  let bestBalance = localBalance;
-  const last9 = phone.slice(-9);
-
-  // 1. Try platform_users
-  try {
-    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', userId).single();
-    if (data) {
-      const bal = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
-      if (bal > 0) bestBalance = Math.max(bestBalance, bal);
-    }
-  } catch {}
-
-  // 2. Try platform_users by phone
-  try {
-    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${last9}%`).single();
-    if (data) {
-      const bal = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
-      if (bal > 0) bestBalance = Math.max(bestBalance, bal);
-    }
-  } catch {}
-
-  // 3. Try users table
-  try {
-    const { data } = await supabase.from('users').select('balance').eq('id', userId).single();
-    if (data) {
-      const bal = Number((data as any).balance ?? 0);
-      if (bal > 0) bestBalance = Math.max(bestBalance, bal);
-    }
-  } catch {}
-
-  // 4. CRITICAL - Calculate from investment_packages (recharges) - This WORKS even if RLS blocks platform_users!
-  try {
-    const { data: recharges } = await supabase.from('investment_packages').select('amount').eq('user_id', userId).eq('status', 'completed');
-    const { data: rechargesByPhone } = await supabase.from('investment_packages').select('amount').ilike('phone_number', `%${last9}%`).eq('status', 'completed');
-    
-    let totalRecharge = 0;
-    if (recharges) totalRecharge += recharges.reduce((s: number, r: any) => s + Number(r.amount||0), 0);
-    if (rechargesByPhone) totalRecharge += rechargesByPhone.reduce((s: number, r: any) => s + Number(r.amount||0), 0);
-    
-    // Remove duplicates - if same user_id also matches phone, we counted twice, so use max
-    if (recharges && rechargesByPhone) {
-      const byIdSum = recharges.reduce((s: number, r: any) => s + Number(r.amount||0), 0);
-      const byPhoneSum = rechargesByPhone.reduce((s: number, r: any) => s + Number(r.amount||0), 0);
-      totalRecharge = Math.max(byIdSum, byPhoneSum);
-    }
-
-    if (totalRecharge > 0) {
-      // Balance = 9000 bonus + recharges - purchases + daily income
-      // For now, calculate minimal: bonus + recharges
-      // Check local purchases
-      let totalPurchased = 0;
-      try {
-        const localProds = JSON.parse(localStorage.getItem('legend_user_products') || '[]').filter((p:any)=>p.userId===userId);
-        totalPurchased = localProds.reduce((s:number, p:any)=>s+Number(p.price||0),0);
-      } catch {}
-      
-      const calculated = 9000 + totalRecharge - totalPurchased;
-      console.log(`💰 Calc from recharges: 9000 + ${totalRecharge} - ${totalPurchased} = ${calculated}, current best ${bestBalance}`);
-      if (calculated > bestBalance) bestBalance = calculated;
-      
-      // If we have 30k recharge, best should be at least 39k
-      if (totalRecharge >= 30000 && bestBalance < 30000) {
-        bestBalance = 9000 + totalRecharge;
-      }
-    }
-  } catch (e) { console.log('Recharge calc failed', e); }
-
-  return bestBalance;
-}
-
 export default function ProductPage() {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState(getCurrentUser());
@@ -163,13 +85,11 @@ export default function ProductPage() {
       let user = getCurrentUser();
       if (!user) { navigate('/login'); return; }
       
-      const trueBal = await getTrueBalance(user.id, user.phone, Number(user.balance||0));
-      if (trueBal !== Number(user.balance||0)) {
-        console.log(`💰 FIXED: ${user.balance} -> ${trueBal}`);
-        const updated = { ...user, balance: trueBal };
+      const fresh = await getFreshBalanceFromSupabase(user.id, user.phone);
+      if (fresh !== null && fresh !== Number(user.balance||0)) {
+        const updated = { ...user, balance: fresh };
         localStorage.setItem('legend_user', JSON.stringify(updated));
         user = updated as any;
-        toast.success(`💰 Wallet fixed: ${formatUGX(trueBal)} - Was ${formatUGX(Number(getCurrentUser()?.balance||0))} before!`);
       }
       
       const products = await getUserProducts(user.id);
@@ -181,9 +101,9 @@ export default function ProductPage() {
     const interval = setInterval(async ()=>{
       const u = getCurrentUser();
       if(!u) return;
-      const trueBal = await getTrueBalance(u.id, u.phone, Number(u.balance||0));
-      if (trueBal !== Number(u.balance||0)) {
-        const updated = { ...u, balance: trueBal };
+      const fresh = await getFreshBalanceFromSupabase(u.id, u.phone);
+      if (fresh !== null && fresh !== Number(u.balance||0)) {
+        const updated = { ...u, balance: fresh };
         localStorage.setItem('legend_user', JSON.stringify(updated));
         setCurrentUser(updated as any);
       }
@@ -200,8 +120,8 @@ export default function ProductPage() {
   const handleBuy = async (productId: number, price: number, dailyIncome: number, term: number, vip: number) => {
     if (!currentUser) return;
 
-    // Get TRUE balance - Multi-source!
-    const trueBalance = await getTrueBalance(currentUser.id, currentUser.phone, Number(currentUser.balance||0));
+    const fresh = await getFreshBalanceFromSupabase(currentUser.id, currentUser.phone);
+    const trueBalance = fresh !== null ? fresh : Number(currentUser.balance||0);
     
     if (trueBalance !== Number(currentUser.balance||0)) {
       const updated = { ...currentUser, balance: trueBalance };
@@ -210,7 +130,7 @@ export default function ProductPage() {
     }
 
     if (trueBalance < price) {
-      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(trueBalance)} - Recharge ${formatUGX(price - trueBalance)} more`, { duration: 6000 });
+      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(trueBalance)}`);
       return;
     }
 
@@ -221,7 +141,7 @@ export default function ProductPage() {
     try {
       const result = await purchaseProduct(currentUser.id, productId, price, dailyIncome, term);
       if (result.success) {
-        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(trueBalance - price)} - Daily +${formatUGX(dailyIncome)}`, { duration: 6000 });
+        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(trueBalance - price)}`, { duration: 6000 });
         const freshUser = getCurrentUser();
         setCurrentUser(freshUser);
         const nextProducts = await getUserProducts(currentUser.id);
@@ -304,4 +224,4 @@ export default function ProductPage() {
       </div>
     </AppLayout>
   );
-                                 }
+                             }
