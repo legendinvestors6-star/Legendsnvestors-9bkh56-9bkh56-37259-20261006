@@ -24,17 +24,6 @@ function getRemainingMs(endDate: string): number {
   return Math.max(0, new Date(endDate).getTime() - Date.now());
 }
 
-function formatRemaining(ms: number): string {
-  if (ms <= 0) return 'Expired';
-  const totalSec = Math.floor(ms / 1000);
-  const days = Math.floor(totalSec / 86400);
-  const hours = Math.floor((totalSec % 86400) / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h remaining`;
-  if (hours > 0) return `${hours}h ${mins}m remaining`;
-  return `${mins}m remaining`;
-}
-
 function getRemainingPercent(purchaseDate: string, endDate: string): number {
   const total = new Date(endDate).getTime() - new Date(purchaseDate).getTime();
   const elapsed = Date.now() - new Date(purchaseDate).getTime();
@@ -111,16 +100,10 @@ export default function ProductPage() {
   const [buying, setBuying] = useState<number | null>(null);
   const [showMyProducts, setShowMyProducts] = useState(false);
 
-  // ===== FIX: SYNC BALANCE FROM SUPABASE - FIXES 39600 vs 9600 BUG =====
   useEffect(() => {
     const load = async () => {
       let user = getCurrentUser();
-      if (!user) {
-        navigate('/login');
-        return;
-      }
-
-      // Sync from Supabase FIRST
+      if (!user) { navigate('/login'); return; }
       try {
         let freshBal: number | null = null;
         const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', user.id).single();
@@ -130,24 +113,34 @@ export default function ProductPage() {
           if (byPhone) freshBal = Number((byPhone as any).wallet_balance ?? (byPhone as any).balance ?? 0);
         }
         if (freshBal !== null && freshBal !== Number(user.balance||0)) {
-          console.log(`💰 ProductPage sync: ${user.balance} -> ${freshBal}`);
           const updated = { ...user, balance: freshBal };
           localStorage.setItem('legend_user', JSON.stringify(updated));
-          try {
-            const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
-            const idx = users.findIndex((u:any)=>u.id===user.id);
-            if(idx!==-1){ users[idx].balance = freshBal; localStorage.setItem('legend_users', JSON.stringify(users)); }
-          } catch {}
           user = updated as any;
           toast.success(`💰 Wallet synced: ${formatUGX(freshBal)}`);
         }
       } catch {}
-
       const products = await getUserProducts(user.id);
       setUserProducts(products);
       setCurrentUser(user);
     };
     load();
+
+    const interval = setInterval(async ()=>{
+      const u = getCurrentUser();
+      if(!u) return;
+      try{
+        const { data } = await supabase.from('platform_users').select('wallet_balance').eq('id', u.id).single();
+        if(data){
+          const fresh = Number((data as any).wallet_balance||0);
+          if(fresh !== Number(u.balance||0)){
+            const updated = { ...u, balance: fresh };
+            localStorage.setItem('legend_user', JSON.stringify(updated));
+            setCurrentUser(updated as any);
+          }
+        }
+      }catch{}
+    }, 3000);
+    return ()=>clearInterval(interval);
   }, [navigate]);
 
   if (!currentUser) return null;
@@ -156,11 +149,8 @@ export default function ProductPage() {
   const activeProducts = normalizedProducts.filter(p => p.status === 'active');
   const expiredProducts = normalizedProducts.filter(p => p.status === 'expired');
 
-  // ===== FIXED BUY - Fetches FRESH balance from Supabase before checking =====
   const handleBuy = async (productId: number, price: number, dailyIncome: number, term: number, vip: number) => {
     if (!currentUser) return;
-
-    // Get FRESH balance from Supabase - Fixes 39600 vs 9600!
     let currentBalance = Number(currentUser.balance||0);
     try {
       const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', currentUser.id).single();
@@ -175,27 +165,22 @@ export default function ProductPage() {
         setCurrentUser(updated as any);
       }
     } catch {}
-
     if (currentBalance < price) {
-      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(currentBalance)} - Logout/login to sync`, { duration: 5000 });
+      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(currentBalance)}`);
       return;
     }
-
     if (!confirm(`Buy VIP${vip} for ${formatUGX(price)}? New balance will be ${formatUGX(currentBalance - price)}`)) return;
-
     setBuying(productId);
-
     try {
       const result = await purchaseProduct(currentUser.id, productId, price, dailyIncome, term);
-
       if (result.success) {
-        toast.success(`✅ VIP ${vip} purchased! ${formatUGX(price)} deducted! New balance: ${formatUGX(currentBalance - price)} - Daily +${formatUGX(dailyIncome)}`, { duration: 6000 });
+        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(currentBalance - price)}`);
         const freshUser = getCurrentUser();
         setCurrentUser(freshUser);
         const nextProducts = await getUserProducts(currentUser.id);
         setUserProducts(nextProducts);
       } else {
-        toast.error(result.message, { duration: 5000 });
+        toast.error(result.message);
       }
     } catch (error: any) {
       toast.error(error?.message || 'Purchase failed');
@@ -222,19 +207,7 @@ export default function ProductPage() {
         </div>
         <div className="text-right">
           <p className="text-xl font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p>
-          <button onClick={async ()=>{
-            const cur = getCurrentUser();
-            if(!cur) return;
-            try{
-              const { data } = await supabase.from('platform_users').select('wallet_balance').eq('id', cur.id).single();
-              if(data){
-                const fresh = Number((data as any).wallet_balance||0);
-                localStorage.setItem('legend_user', JSON.stringify({...cur, balance: fresh}));
-                setCurrentUser({...cur, balance: fresh} as any);
-                toast.success(`Synced: ${formatUGX(fresh)}`);
-              }
-            }catch{}
-          }} className="text-[#c9a84c] text-[10px] border border-[#c9a84c] px-2 py-0.5 rounded-full">🔄 Sync • My income &gt;</button>
+          <p className="text-gray-500 text-xs">My income {'>'}</p>
         </div>
       </div>
 
@@ -286,4 +259,4 @@ export default function ProductPage() {
       </div>
     </AppLayout>
   );
-}
+      }
