@@ -3,16 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { CreditCard, ArrowDownToLine, Calendar, CheckSquare, ChevronRight, Bell, Clock, TrendingUp } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import MessageNotification from '@/components/features/MessageNotification';
-import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX } from '@/lib/storage';
+import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX, getFreshBalanceFromSupabase } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import heroBanner from '@/assets/hero-banner.jpg';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  (import.meta as any).env?.VITE_SUPABASE_URL || '',
-  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
-);
 
 const GAME_IMAGES = [
   'https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?w=200&h=150&fit=crop',
@@ -30,38 +24,6 @@ function formatCountdown(ms: number): string {
   return `${h}:${m}:${s}`;
 }
 
-// ===== ROBUST - Calculates true balance from investment_packages - Bypasses RLS! =====
-async function getTrueBalance(userId: string, phone: string, localBalance: number): Promise<number> {
-  let best = localBalance;
-  const last9 = phone.slice(-9);
-
-  try {
-    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', userId).single();
-    if (data) best = Math.max(best, Number((data as any).wallet_balance ?? (data as any).balance ?? 0));
-  } catch {}
-  try {
-    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${last9}%`).single();
-    if (data) best = Math.max(best, Number((data as any).wallet_balance ?? (data as any).balance ?? 0));
-  } catch {}
-
-  try {
-    const { data: byId } = await supabase.from('investment_packages').select('amount').eq('user_id', userId).eq('status', 'completed');
-    const { data: byPhone } = await supabase.from('investment_packages').select('amount').ilike('phone_number', `%${last9}%`).eq('status', 'completed');
-    let total = 0;
-    if (byId?.length) total = Math.max(total, byId.reduce((s: number, r: any) => s + Number(r.amount||0), 0));
-    if (byPhone?.length) total = Math.max(total, byPhone.reduce((s: number, r: any) => s + Number(r.amount||0), 0));
-    if (total > 0) {
-      let purchased = 0;
-      try { const prods = JSON.parse(localStorage.getItem('legend_user_products') || '[]').filter((p:any)=>p.userId===userId); purchased = prods.reduce((s:number,p:any)=>s+Number(p.price||0),0); } catch {}
-      const calc = 9000 + total - purchased;
-      if (calc > best) best = calc;
-      if (total >= 30000 && best < 30000) best = 9000 + total;
-    }
-  } catch {}
-
-  return best;
-}
-
 export default function HomePage() {
   const navigate = useNavigate();
   const [showNotification, setShowNotification] = useState(false);
@@ -74,21 +36,21 @@ export default function HomePage() {
     try {
       const cur = getCurrentUser();
       if (!cur) return null;
-      const trueBal = await getTrueBalance(userId, phone, Number(cur.balance||0));
-      if (trueBal !== Number(cur.balance||0)) {
+      const fresh = await getFreshBalanceFromSupabase(userId, phone);
+      if (fresh !== null && fresh !== Number(cur.balance||0)) {
         const raw = localStorage.getItem('legend_user');
         if (raw) {
           const obj = JSON.parse(raw);
-          obj.balance = trueBal;
+          obj.balance = fresh;
           localStorage.setItem('legend_user', JSON.stringify(obj));
           setCurrentUser(obj);
         }
         try {
           const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
           const idx = users.findIndex((u:any) => u.id === userId || u.phone === phone);
-          if (idx !== -1) { users[idx].balance = trueBal; localStorage.setItem('legend_users', JSON.stringify(users)); }
+          if (idx !== -1) { users[idx].balance = fresh; localStorage.setItem('legend_users', JSON.stringify(users)); }
         } catch {}
-        return trueBal;
+        return fresh;
       }
     } catch (e) { console.error('Sync failed', e); }
     return null;
@@ -111,7 +73,6 @@ export default function HomePage() {
       const syncedBal = await syncBalance(user.id, user.phone);
       if (syncedBal !== null) {
         user = { ...user, balance: syncedBal };
-        toast.success(`💰 Wallet synced: ${formatUGX(syncedBal)}!`);
       }
       if (prevBalanceRef.current === null) prevBalanceRef.current = user.balance;
       setCurrentUser(user);
@@ -230,4 +191,4 @@ export default function HomePage() {
       <div className="h-4" />
     </AppLayout>
   );
-                                           }
+}
