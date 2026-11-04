@@ -1,17 +1,49 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Info, Shield, ListOrdered, Headphones, CreditCard, Gift, LogOut, ChevronRight, CreditCard as RechargeIcon, ArrowDownToLine, Activity, TrendingUp, UserCircle } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
-import { getCurrentUser, setCurrentUser, formatUGX } from '@/lib/storage';
+import { getCurrentUser, setCurrentUser as saveUser, formatUGX, getFreshBalanceFromSupabase } from '@/lib/storage';
 
 export default function MinePage() {
   const navigate = useNavigate();
   const [currentUser, setUser] = useState(getCurrentUser());
+  const [isSyncing, setIsSyncing] = useState(true);
+
+  // THIS FIXES YOUR SCREENSHOT 39,000 -> 9,000 FOR EVERYONE!
+  useEffect(() => {
+    const syncBalance = async () => {
+      const u = getCurrentUser();
+      if (!u) { navigate('/'); return; }
+
+      // Skip sync if just purchased (30 sec)
+      const noSyncUntil = Number(sessionStorage.getItem('legend_no_sync_until') || 0);
+      if (Date.now() < noSyncUntil) {
+        setIsSyncing(false);
+        return;
+      }
+
+      try {
+        const fresh = await getFreshBalanceFromSupabase(u.id, u.phone);
+        if (fresh !== null && fresh !== Number(u.balance || 0)) {
+          console.log(`MinePage: Syncing ${u.balance} -> ${fresh}`);
+          const updated = { ...u, balance: fresh };
+          saveUser(updated);
+          localStorage.setItem('legend_user', JSON.stringify(updated));
+          setUser(updated);
+        }
+      } catch (e) {
+        console.log('Mine sync fail', e);
+      }
+      setIsSyncing(false);
+    };
+    syncBalance();
+  }, [navigate]);
 
   if (!currentUser) { navigate('/'); return null; }
 
   const handleSignOut = () => {
-    setCurrentUser(null);
+    saveUser(null as any);
+    localStorage.removeItem('legend_user');
     navigate('/login');
   };
 
@@ -49,7 +81,7 @@ export default function MinePage() {
         </div>
 
         <div className="mb-3">
-          <p className="text-gray-500 text-xs mb-1">Balance</p>
+          <p className="text-gray-500 text-xs mb-1">Balance {isSyncing ? '(syncing...)' : ''}</p>
           <p className="text-[#c9a84c] text-3xl font-black">{formatUGX(currentUser.balance)}</p>
         </div>
 
@@ -113,4 +145,4 @@ export default function MinePage() {
       </div>
     </AppLayout>
   );
-}
+                      }
