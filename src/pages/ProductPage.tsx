@@ -2,7 +2,13 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShoppingBag, Clock, CheckCircle, XCircle, Timer } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
-import { getCurrentUser, getUserProducts, purchaseProduct, formatUGX, getFreshBalanceFromSupabase } from '@/lib/storage';
+import {
+  getCurrentUser,
+  getUserProducts,
+  purchaseProduct,
+  formatUGX,
+  getFreshBalanceFromSupabase,
+} from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import type { UserProduct } from '@/types';
@@ -14,59 +20,195 @@ const BMW_IMAGES = [
   'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=120&h=120&fit=crop',
 ];
 
-function getRemainingMs(endDate: string): number { return Math.max(0, new Date(endDate).getTime() - Date.now()); }
+function getRemainingMs(endDate: string): number {
+  return Math.max(0, new Date(endDate).getTime() - Date.now());
+}
+
 function getRemainingPercent(purchaseDate: string, endDate: string): number {
-  const total = new Date(endDate).getTime() - new Date(purchaseDate).getTime();
+  const total =
+    new Date(endDate).getTime() - new Date(purchaseDate).getTime();
+
+  if (!Number.isFinite(total) || total <= 0) return 0;
+
   const elapsed = Date.now() - new Date(purchaseDate).getTime();
   return Math.max(0, Math.min(100, ((total - elapsed) / total) * 100));
 }
 
-function ActiveProductCard({ userProduct, productDef }: { userProduct: UserProduct; productDef: typeof PRODUCTS[0] }) {
-  const [remainingMs, setRemainingMs] = useState(() => getRemainingMs(userProduct.endDate));
+function ActiveProductCard({
+  userProduct,
+  productDef,
+}: {
+  userProduct: UserProduct;
+  productDef: (typeof PRODUCTS)[number];
+}) {
+  const [remainingMs, setRemainingMs] = useState(() =>
+    getRemainingMs(userProduct.endDate)
+  );
   const [expired, setExpired] = useState(remainingMs <= 0);
+
   useEffect(() => {
     if (expired) return;
-    const interval = setInterval(() => {
+
+    const interval = window.setInterval(() => {
       const ms = getRemainingMs(userProduct.endDate);
       setRemainingMs(ms);
-      if (ms <= 0) { setExpired(true); clearInterval(interval); }
+
+      if (ms <= 0) {
+        setExpired(true);
+        window.clearInterval(interval);
+      }
     }, 1000);
-    return () => clearInterval(interval);
+
+    return () => window.clearInterval(interval);
   }, [userProduct.endDate, expired]);
-  const percent = getRemainingPercent(userProduct.purchaseDate, userProduct.endDate);
+
+  const percent = getRemainingPercent(
+    userProduct.purchaseDate,
+    userProduct.endDate
+  );
   const totalSec = Math.floor(remainingMs / 1000);
   const days = Math.floor(totalSec / 86400);
   const hours = Math.floor((totalSec % 86400) / 3600);
   const mins = Math.floor((totalSec % 3600) / 60);
   const secs = totalSec % 60;
+
   return (
-    <div className="rounded-2xl overflow-hidden mb-3" style={{ background: expired ? '#151515' : 'linear-gradient(135deg, #1a1100, #201800)', border: expired ? '1px solid #333' : '1px solid rgba(201,168,76,0.4)' }}>
+    <div
+      className="rounded-2xl overflow-hidden mb-3"
+      style={{
+        background: expired
+          ? '#151515'
+          : 'linear-gradient(135deg, #1a1100, #201800)',
+        border: expired
+          ? '1px solid #333'
+          : '1px solid rgba(201,168,76,0.4)',
+      }}
+    >
       <div className="flex gap-3 p-4">
         <div className="relative flex-shrink-0">
-          <img src={BMW_IMAGES[productDef.vip % BMW_IMAGES.length]} alt={productDef.name} className="w-20 h-20 rounded-xl object-cover" style={{ border: '1px solid #2a2a2a', filter: expired ? 'grayscale(1) opacity(0.5)' : 'none' }} />
-          <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">VIP{productDef.vip}</div>
+          <img
+            src={BMW_IMAGES[productDef.vip % BMW_IMAGES.length]}
+            alt={productDef.name}
+            className="w-20 h-20 rounded-xl object-cover"
+            style={{
+              border: '1px solid #2a2a2a',
+              filter: expired ? 'grayscale(1) opacity(0.5)' : 'none',
+            }}
+          />
+          <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">
+            VIP{productDef.vip}
+          </div>
         </div>
+
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-white font-bold text-sm">{productDef.name}</h3>
-            {expired ? <span className="flex items-center gap-1 text-[10px] font-semibold text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)' }}><XCircle size={10} /> Expired</span> : <span className="flex items-center gap-1 text-[10px] font-semibold text-green-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(34,197,94,0.1)' }}><CheckCircle size={10} /> Active</span>}
+            {expired ? (
+              <span
+                className="flex items-center gap-1 text-[10px] font-semibold text-red-400 px-2 py-0.5 rounded-full"
+                style={{ background: 'rgba(239,68,68,0.1)' }}
+              >
+                <XCircle size={10} /> Expired
+              </span>
+            ) : (
+              <span
+                className="flex items-center gap-1 text-[10px] font-semibold text-green-400 px-2 py-0.5 rounded-full"
+                style={{ background: 'rgba(34,197,94,0.1)' }}
+              >
+                <CheckCircle size={10} /> Active
+              </span>
+            )}
           </div>
+
           <div className="space-y-0.5 mb-2">
-            <div className="flex justify-between text-xs"><span className="text-gray-500">Daily income:</span><span className="text-[#c9a84c] font-semibold">{formatUGX(productDef.dailyIncome)}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-gray-500">Purchase:</span><span className="text-gray-400">{new Date(userProduct.purchaseDate).toLocaleDateString()}</span></div>
-            <div className="flex justify-between text-xs"><span className="text-gray-500">Expires:</span><span className="text-gray-400">{new Date(userProduct.endDate).toLocaleDateString()}</span></div>
-          </div>
-          {!expired ? (
-            <div className="rounded-xl p-2" style={{ background: 'rgba(0,0,0,0.4)' }}>
-              <div className="flex items-center gap-1 mb-1"><Timer size={10} className="text-[#c9a84c]" /><p className="text-[10px] text-gray-500">Time remaining</p></div>
-              <div className="flex gap-1">{[{ val: days, unit: 'd' },{ val: hours, unit: 'h' },{ val: mins, unit: 'm' },{ val: secs, unit: 's' }].map((item, i) => (
-                  <div key={i} className="flex items-end gap-0.5"><div className="w-7 h-7 rounded-lg flex items-center justify-center font-black text-sm tabular-nums" style={{ background: 'rgba(201,168,76,0.15)', color: '#c9a84c', border: '1px solid rgba(201,168,76,0.3)' }}>{String(item.val).padStart(2, '0')}</div><span className="text-gray-600 text-[9px] mb-0.5">{item.unit}</span>{i < 3 && <span className="text-[#c9a84c] font-bold text-xs mb-0.5 mx-0.5">:</span>}</div>
-                ))}</div>
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Daily income:</span>
+              <span className="text-[#c9a84c] font-semibold">
+                {formatUGX(productDef.dailyIncome)}
+              </span>
             </div>
-          ) : <div className="rounded-xl p-2 text-center" style={{ background: 'rgba(239,68,68,0.06)' }}><p className="text-red-400 text-xs font-semibold">Term ended</p></div>}
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Purchase:</span>
+              <span className="text-gray-400">
+                {new Date(userProduct.purchaseDate).toLocaleDateString()}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Expires:</span>
+              <span className="text-gray-400">
+                {new Date(userProduct.endDate).toLocaleDateString()}
+              </span>
+            </div>
+          </div>
+
+          {!expired ? (
+            <div
+              className="rounded-xl p-2"
+              style={{ background: 'rgba(0,0,0,0.4)' }}
+            >
+              <div className="flex items-center gap-1 mb-1">
+                <Timer size={10} className="text-[#c9a84c]" />
+                <p className="text-[10px] text-gray-500">Time remaining</p>
+              </div>
+
+              <div className="flex gap-1">
+                {[
+                  { val: days, unit: 'd' },
+                  { val: hours, unit: 'h' },
+                  { val: mins, unit: 'm' },
+                  { val: secs, unit: 's' },
+                ].map((item, i) => (
+                  <div key={i} className="flex items-end gap-0.5">
+                    <div
+                      className="w-7 h-7 rounded-lg flex items-center justify-center font-black text-sm tabular-nums"
+                      style={{
+                        background: 'rgba(201,168,76,0.15)',
+                        color: '#c9a84c',
+                        border: '1px solid rgba(201,168,76,0.3)',
+                      }}
+                    >
+                      {String(item.val).padStart(2, '0')}
+                    </div>
+                    <span className="text-gray-600 text-[9px] mb-0.5">
+                      {item.unit}
+                    </span>
+                    {i < 3 && (
+                      <span className="text-[#c9a84c] font-bold text-xs mb-0.5 mx-0.5">
+                        :
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div
+              className="rounded-xl p-2 text-center"
+              style={{ background: 'rgba(239,68,68,0.06)' }}
+            >
+              <p className="text-red-400 text-xs font-semibold">Term ended</p>
+            </div>
+          )}
         </div>
       </div>
-      {!expired && <div className="px-4 pb-3"><div className="flex justify-between text-[10px] text-gray-600 mb-1"><span>Progress</span><span>{(100 - percent).toFixed(1)}% elapsed</span></div><div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#1e1e1e' }}><div className="h-full rounded-full gold-gradient" style={{ width: `${100 - percent}%` }} /></div></div>}
+
+      {!expired && (
+        <div className="px-4 pb-3">
+          <div className="flex justify-between text-[10px] text-gray-600 mb-1">
+            <span>Progress</span>
+            <span>{(100 - percent).toFixed(1)}% elapsed</span>
+          </div>
+          <div
+            className="h-1.5 rounded-full overflow-hidden"
+            style={{ background: '#1e1e1e' }}
+          >
+            <div
+              className="h-full rounded-full gold-gradient"
+              style={{ width: `${100 - percent}%` }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -79,70 +221,115 @@ export default function ProductPage() {
   const [showMyProducts, setShowMyProducts] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     const load = async () => {
-      let user = getCurrentUser();
-      if (!user) { navigate('/login'); return; }
-      // Only sync ONCE on load, NOT every 3 seconds - Prevents money coming back!
-      const fresh = await getFreshBalanceFromSupabase(user.id, user.phone);
-      if (fresh !== null) {
-        // Only allow sync if fresh is GREATER than local (recharge) OR equal to expected after purchase
-        // If user has products, fresh should be LOWER, so allow it
-        if (fresh !== Number(user.balance||0)) {
-          const updated = { ...user, balance: fresh };
-          localStorage.setItem('legend_user', JSON.stringify(updated));
-          user = updated as any;
+      try {
+        let user = getCurrentUser();
+
+        if (!user) {
+          navigate('/login');
+          return;
+        }
+
+        const freshBalance = await getFreshBalanceFromSupabase(
+          user.id,
+          user.phone
+        );
+
+        if (cancelled) return;
+
+        if (
+          freshBalance !== null &&
+          freshBalance !== Number(user.balance || 0)
+        ) {
+          user = { ...user, balance: freshBalance };
+          localStorage.setItem('legend_user', JSON.stringify(user));
+        }
+
+        const products = await getUserProducts(user.id);
+
+        if (cancelled) return;
+
+        setCurrentUser(user);
+        setUserProducts(products);
+      } catch (error) {
+        console.error('Failed to load product page:', error);
+        if (!cancelled) {
+          toast.error('Could not load your account or products');
         }
       }
-      const products = await getUserProducts(user.id);
-      setUserProducts(products);
-      setCurrentUser(user);
     };
-    load();
-    // NO INTERVAL - This was the bug that restored money!
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
   }, [navigate]);
 
-  if (!currentUser) return null;
+  const normalizedProducts = userProducts.map((product) => ({
+    ...product,
+    status:
+      getRemainingMs(product.endDate) <= 0
+        ? ('expired' as const)
+        : product.status,
+  }));
 
-  const normalizedProducts = userProducts.map(up => ({ ...up, status: getRemainingMs(up.endDate) <= 0 ? 'expired' as const : up.status }));
-  const activeProducts = normalizedProducts.filter(p => p.status === 'active');
-  const expiredProducts = normalizedProducts.filter(p => p.status === 'expired');
+  const activeProducts = normalizedProducts.filter(
+    (product) => product.status === 'active'
+  );
+  const expiredProducts = normalizedProducts.filter(
+    (product) => product.status === 'expired'
+  );
 
-  const handleBuy = async (productId: number, price: number, dailyIncome: number, term: number, vip: number) => {
-    if (!currentUser) return;
+  const handleBuy = async (
+    productId: number,
+    price: number,
+    dailyIncome: number,
+    term: number,
+    vip: number
+  ) => {
+    if (!currentUser || buying !== null) return;
 
-    const fresh = await getFreshBalanceFromSupabase(currentUser.id, currentUser.phone);
-    const trueBalance = fresh !== null ? fresh : Number(currentUser.balance||0);
-    
-    if (trueBalance < price) {
-      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(trueBalance)}`);
-      return;
-    }
+    if (!confirm(`Buy VIP${vip} for ${formatUGX(price)}?`)) return;
 
-    if (!confirm(`Buy VIP${vip} for ${formatUGX(price)}? New balance will be ${formatUGX(trueBalance - price)}`)) return;
     setBuying(productId);
 
     try {
-      const result = await purchaseProduct(currentUser.id, productId, price, dailyIncome, term);
-      if (result.success) {
-        // FORCE local to 9000 immediately and KEEP it
-        const newBal = trueBalance - price;
-        const updated = { ...currentUser, balance: newBal };
-        localStorage.setItem('legend_user', JSON.stringify(updated));
-        setCurrentUser(updated as any);
-        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(newBal)} - Money deducted!`, { duration: 6000 });
-        const nextProducts = await getUserProducts(currentUser.id);
-        setUserProducts(nextProducts);
-        // Prevent any auto-sync for 10 seconds
-        sessionStorage.setItem('legend_no_sync_until', String(Date.now() + 10000));
-      } else {
+      // The purchase RPC must check the authoritative balance, deduct the
+      // price, and create the product. Do not calculate a replacement balance
+      // in this page.
+      const result = await purchaseProduct(
+        currentUser.id,
+        productId,
+        price,
+        dailyIncome,
+        term
+      );
+
+      if (!result.success) {
         toast.error(result.message);
+        return;
       }
+
+      // purchaseProduct updates local user data only after the RPC succeeds.
+      const updatedUser = getCurrentUser();
+      if (updatedUser) setCurrentUser(updatedUser);
+
+      const nextProducts = await getUserProducts(currentUser.id);
+      setUserProducts(nextProducts);
+
+      toast.success(result.message, { duration: 6000 });
     } catch (error: any) {
+      console.error('Product purchase failed:', error);
       toast.error(error?.message || 'Purchase failed');
     } finally {
       setBuying(null);
     }
   };
+
+  if (!currentUser) return null;
 
   return (
     <AppLayout>
@@ -153,13 +340,29 @@ export default function ProductPage() {
         </h1>
       </div>
 
-      <div className="mx-4 mb-3 rounded-2xl p-4 grid grid-cols-2 gap-3" style={{ background: '#151515', border: '1px solid rgba(201,168,76,0.2)' }}>
+      <div
+        className="mx-4 mb-3 rounded-2xl p-4 grid grid-cols-2 gap-3"
+        style={{
+          background: '#151515',
+          border: '1px solid rgba(201,168,76,0.2)',
+        }}
+      >
         <div>
-          <p className="text-3xl font-black text-[#c9a84c]">{activeProducts.length}</p>
-          <button onClick={() => setShowMyProducts(!showMyProducts)} className="text-gray-500 text-xs flex items-center gap-1">My products {showMyProducts ? '▲' : '▼'}</button>
+          <p className="text-3xl font-black text-[#c9a84c]">
+            {activeProducts.length}
+          </p>
+          <button
+            onClick={() => setShowMyProducts(!showMyProducts)}
+            className="text-gray-500 text-xs flex items-center gap-1"
+          >
+            My products {showMyProducts ? '▲' : '▼'}
+          </button>
         </div>
+
         <div className="text-right">
-          <p className="text-xl font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p>
+          <p className="text-xl font-black text-[#c9a84c]">
+            {formatUGX(currentUser.balance)}
+          </p>
           <p className="text-gray-500 text-xs">My income {'>'}</p>
         </div>
       </div>
@@ -169,12 +372,31 @@ export default function ProductPage() {
           <div className="flex items-center gap-2 mb-3">
             <Clock size={14} className="text-[#c9a84c]" />
             <h3 className="text-white font-bold text-sm">My Products</h3>
-            {expiredProducts.length > 0 && <span className="text-[10px] text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)' }}>{expiredProducts.length} expired</span>}
+
+            {expiredProducts.length > 0 && (
+              <span
+                className="text-[10px] text-red-400 px-2 py-0.5 rounded-full"
+                style={{ background: 'rgba(239,68,68,0.1)' }}
+              >
+                {expiredProducts.length} expired
+              </span>
+            )}
           </div>
-          {normalizedProducts.map(up => {
-            const def = PRODUCTS.find(p => p.id === up.productId);
-            if (!def) return null;
-            return <ActiveProductCard key={up.id} userProduct={up} productDef={def} />;
+
+          {normalizedProducts.map((userProduct) => {
+            const productDef = PRODUCTS.find(
+              (product) => product.id === userProduct.productId
+            );
+
+            if (!productDef) return null;
+
+            return (
+              <ActiveProductCard
+                key={userProduct.id}
+                userProduct={userProduct}
+                productDef={productDef}
+              />
+            );
           })}
         </div>
       )}
@@ -188,28 +410,74 @@ export default function ProductPage() {
 
       <div className="px-4 space-y-3 pb-4">
         {PRODUCTS.map((product, i) => (
-          <div key={product.id} className="rounded-2xl overflow-hidden" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+          <div
+            key={product.id}
+            className="rounded-2xl overflow-hidden"
+            style={{ background: '#151515', border: '1px solid #2a2a2a' }}
+          >
             <div className="flex gap-3 p-4">
               <div className="relative flex-shrink-0">
-                <img src={BMW_IMAGES[i % BMW_IMAGES.length]} alt={product.name} className="w-24 h-24 rounded-xl object-cover" style={{ border: '1px solid #2a2a2a' }} />
-                <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">VIP{product.vip}</div>
+                <img
+                  src={BMW_IMAGES[i % BMW_IMAGES.length]}
+                  alt={product.name}
+                  className="w-24 h-24 rounded-xl object-cover"
+                  style={{ border: '1px solid #2a2a2a' }}
+                />
+                <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">
+                  VIP{product.vip}
+                </div>
               </div>
+
               <div className="flex-1 min-w-0">
-                <h3 className="text-white font-bold text-sm mb-2">{product.name}</h3>
-                <p className="text-[#c9a84c] font-black text-lg">{formatUGX(product.price)}</p>
+                <h3 className="text-white font-bold text-sm mb-2">
+                  {product.name}
+                </h3>
+                <p className="text-[#c9a84c] font-black text-lg">
+                  {formatUGX(product.price)}
+                </p>
+
                 <div className="mt-1 space-y-0.5">
-                  <div className="flex justify-between text-xs"><span className="text-gray-500">Term:</span><span className="text-white font-medium">{product.term}-day</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-gray-500">Daily income:</span><span className="text-[#c9a84c] font-semibold">{formatUGX(product.dailyIncome)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-gray-500">Total income:</span><span className="text-white font-medium">{formatUGX(product.totalIncome)}</span></div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Term:</span>
+                    <span className="text-white font-medium">
+                      {product.term}-day
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Daily income:</span>
+                    <span className="text-[#c9a84c] font-semibold">
+                      {formatUGX(product.dailyIncome)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-gray-500">Total income:</span>
+                    <span className="text-white font-medium">
+                      {formatUGX(product.totalIncome)}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
-            <button onClick={() => handleBuy(product.id, product.price, product.dailyIncome, product.term, product.vip)} disabled={buying === product.id} className="w-full py-3.5 font-bold text-black text-sm gold-gradient disabled:opacity-60 flex items-center justify-center gap-2">
-              <ShoppingBag size={16} />{buying === product.id ? 'Processing...' : 'BUY NOW'}
+
+            <button
+              onClick={() =>
+                handleBuy(
+                  product.id,
+                  product.price,
+                  product.dailyIncome,
+                  product.term,
+                  product.vip
+                )
+              }
+              disabled={buying !== null}
+              className="w-full py-3.5 font-bold text-black text-sm gold-gradient disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              <ShoppingBag size={16} />
+              {buying === product.id ? 'Processing...' : 'BUY NOW'}
             </button>
           </div>
         ))}
       </div>
     </AppLayout>
   );
-}
+                   }
