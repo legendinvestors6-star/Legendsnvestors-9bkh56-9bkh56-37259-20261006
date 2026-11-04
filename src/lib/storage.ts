@@ -113,34 +113,17 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
 
 export function formatUGX(amount: number): string { try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; } }
 
-// FIXED: 9000 BONUS IMMEDIATELY ON REGISTER
 export function registerUser(phone: string, password: string, referralCode?: string): { success: boolean; message: string; user?: User } {
   initAdmin(); 
   const users = getUsers(); 
   if (users.find(u => u.phone === phone)) return { success: false, message: 'Phone number already registered' };
   let referredBy: string | undefined; 
   if (referralCode) { const referrer = users.find(u => u.referralCode === referralCode.toUpperCase()); if (referrer) referredBy = referrer.id; }
-  
   const BONUS = 9000;
-  
-  const newUser: User = { 
-    id: generateId(), 
-    phone, 
-    password, 
-    balance: BONUS,
-    cumulativeIncome: 0, 
-    level: 1, 
-    referralCode: generateReferralCode(), 
-    referredBy, 
-    checkInDays: 0, 
-    createdAt: new Date().toISOString(), 
-    isAdmin: false 
-  } as any;
-  
+  const newUser: User = { id: generateId(), phone, password, balance: BONUS, cumulativeIncome: 0, level: 1, referralCode: generateReferralCode(), referredBy, checkInDays: 0, createdAt: new Date().toISOString(), isAdmin: false } as any;
   saveUsers([...users, newUser]); 
   addTransaction({ userId: newUser.id, type: 'bonus', amount: BONUS, status: 'completed', description: 'Registration bonus - UGX 9,000' } as any);
   setCurrentUser(newUser);
-  
   return { success: true, message: 'Registration successful - UGX 9,000 bonus credited!', user: newUser };
 }
 
@@ -151,9 +134,75 @@ export function loginUser(phone: string, password: string): { success: boolean; 
 export function getTransactions(userId?: string): Transaction[] { const data = safeParse<Transaction[]>(localStorage.getItem(KEYS.TRANSACTIONS), []); if (!userId) return data; return data.filter(t => (t as any).userId === userId); }
 export function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Transaction { const transactions = getTransactions(); const newTx: Transaction = { ...tx, id: generateId(), createdAt: new Date().toISOString() } as any; localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTx, ...transactions])); return newTx; }
 export function getRechargeOrders(userId?: string): RechargeOrder[] { const all = safeParse<RechargeOrder[]>(localStorage.getItem(KEYS.RECHARGE_ORDERS), []); if (!userId) return all; return all.filter(o => (o as any).userId === userId); }
-export function createRechargeOrder(userId: string, amount: number, paymentMethod: string, phoneNumber: string): RechargeOrder { const orders = getRechargeOrders(); const order: RechargeOrder = { id: generateId(), userId, amount, paymentMethod, phoneNumber, status: 'pending', createdAt: new Date().toISOString() } as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify([order, ...orders])); return order; }
-export function approveRechargeOrder(orderId: string): boolean { const orders = getRechargeOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'completed' as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); addTransaction({ userId: orders[idx].userId, type: 'recharge', amount: orders[idx].amount, status: 'completed', description: 'Recharge approved - PesaJet' } as any); updateUser(orders[idx].userId, { balance: ((orders[idx] as any).amount || 0) + (getUsers().find(u=>u.id===orders[idx].userId)?.balance || 0) } as any); return true; }
-export function rejectRechargeOrder(orderId: string): boolean { const orders = getRechargeOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'rejected' as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); return true; }
+
+// ===== FIXED FOR GITHUB + VERCEL - PesaJet Uses Recharge Table + Webhook - No more 0! =====
+export function createRechargeOrder(userId: string, amount: number, paymentMethod: string, phoneNumber: string): RechargeOrder { 
+  const orders = getRechargeOrders(); 
+  const orderId = generateId();
+  const order: RechargeOrder = { id: orderId, userId, amount, paymentMethod, phoneNumber, status: 'pending', createdAt: new Date().toISOString() } as any; 
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify([order, ...orders])); 
+  
+  // FIX: Save to Supabase investment_packages - PesaJet reads from Recharge table - Webhook backup
+  try {
+    console.log('🚀 Saving RECHARGE to Supabase for PesaJet:', orderId, amount);
+    supabase.from('investment_packages').insert({
+      id: orderId,
+      user_id: userId,
+      amount: Number(amount),
+      product_name: 'RECHARGE',
+      status: 'pending',
+      payment_method: paymentMethod,
+      phone_number: phoneNumber,
+      submitted_at: new Date().toISOString()
+    }).then(({error}) => {
+      if(error) {
+        console.error('❌ Supabase direct save FAILED:', error.message);
+      } else {
+        console.log('✅ RECHARGE saved - Admin will see from any phone!');
+      }
+    });
+
+    const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+    if(supabaseUrl){
+      const webhookUrl = `${supabaseUrl}/functions/v1/pesajet-webhook`;
+      fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${(import.meta as any).env?.VITE_SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ userId, amount, phoneNumber, paymentMethod, orderId })
+      }).then(r=>r.json()).then(d=>console.log('Webhook:', d)).catch(()=>{});
+    }
+  } catch(e){ console.error('createRechargeOrder error', e); }
+  
+  return order; 
+}
+
+export function approveRechargeOrder(orderId: string): boolean { 
+  const orders = getRechargeOrders(); 
+  const idx = orders.findIndex(o => o.id === orderId); 
+  if (idx === -1) {
+    try{ supabase.from('investment_packages').update({status:'completed'}).eq('id',orderId).then(()=>{}); }catch{}
+    return true;
+  }
+  orders[idx].status = 'completed' as any; 
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); 
+  addTransaction({ userId: orders[idx].userId, type: 'recharge', amount: orders[idx].amount, status: 'completed', description: 'Recharge approved - PesaJet' } as any); 
+  updateUser(orders[idx].userId, { balance: ((orders[idx] as any).amount || 0) + (getUsers().find(u=>u.id===orders[idx].userId)?.balance || 0) } as any); 
+  try{ supabase.from('investment_packages').update({status:'completed'}).eq('id',orderId).then(()=>{}); }catch{}
+  return true; 
+}
+
+export function rejectRechargeOrder(orderId: string): boolean { 
+  const orders = getRechargeOrders(); 
+  const idx = orders.findIndex(o => o.id === orderId); 
+  if (idx === -1) {
+    try{ supabase.from('investment_packages').update({status:'rejected'}).eq('id',orderId).then(()=>{}); }catch{}
+    return true;
+  }
+  orders[idx].status = 'rejected' as any; 
+  localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); 
+  try{ supabase.from('investment_packages').update({status:'rejected'}).eq('id',orderId).then(()=>{}); }catch{}
+  return true; 
+}
 
 export function getWithdrawOrders(userId?: string): WithdrawOrder[] { return safeParse<WithdrawOrder[]>(localStorage.getItem(KEYS.WITHDRAW_ORDERS), []).filter(o => !userId || (o as any).userId === userId); }
 export function createWithdrawOrder(userId: string, amount: number): { success: boolean; message: string; order?: WithdrawOrder } {
@@ -293,7 +342,6 @@ export function rejectPasswordReset(id: string, note?: string): boolean { const 
 export function getTeamMembers(userId: string) { const users = getUsers(); const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId); const level1Ids = level1.map(u => u.id); const level2 = users.filter(u => level1Ids.includes(u.referredBy as any) || level1Ids.includes((u as any).referred_by)); const level2Ids = level2.map(u => u.id); const level3 = users.filter(u => level2Ids.includes(u.referredBy as any) || level2Ids.includes((u as any).referred_by)); return { level1, level2, level3 }; }
 export function getTeamCommissions(userId: string) { const { level1, level2, level3 } = getTeamMembers(userId); const sum = (arr: User[]) => arr.reduce((s, u) => s + (u.balance || 0), 0); const c1 = sum(level1) * (LEVEL1_RATE || 0.27); const c2 = sum(level2) * (LEVEL2_RATE || 0.02); const c3 = sum(level3) * (LEVEL3_RATE || 0.01); return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) }; }
 
-// ===== REDEEM CODES - FIXED - NO MORE d is not a function =====
 export function getGiftCodes(): GiftCode[] { 
   const raw = localStorage.getItem(KEYS.GIFT_CODES);
   if(!raw) return [];
@@ -348,7 +396,6 @@ export function useGiftCode(code: string, userId: string): { success: boolean; a
   return { success:true, amount:f.amount };
 }
 
-// FIXES "d is not a function" - THIS WAS MISSING!
 export async function redeemGiftCode(userId: string, enteredCode: string): Promise<{ success: boolean; amount?: number; message?: string }> {
   try {
     const trimmed = enteredCode.trim().toUpperCase();
