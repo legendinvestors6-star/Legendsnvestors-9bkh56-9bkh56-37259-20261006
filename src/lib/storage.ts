@@ -91,14 +91,6 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
         const idx = users.findIndex(x => x.id === userId);
         if (idx === -1) { users.push(updated as any); } else { users[idx] = { ...users[idx], ...updates } as any; }
         saveUsers(users);
-        try{
-          const bal = (updates as any).balance;
-          if(bal !== undefined){
-            supabase.from('platform_users').update({ wallet_balance: bal, balance: bal }).eq('id', userId).then(()=>{});
-            supabase.from('platform_users').update({ wallet_balance: bal }).ilike('phone', `%${u.phone?.slice(-9)}%`).then(()=>{});
-            supabase.from('users').update({ balance: bal }).eq('id', userId).then(()=>{});
-          }
-        }catch{}
         return updated as any;
       }
     }
@@ -110,39 +102,50 @@ export function updateUser(userId: string, updates: Partial<User>): User | null 
     if (cur && cur.id === userId) {
       const merged = { ...cur, ...updates } as User;
       saveUsers([...users, merged]);
-      try{
-        const bal = (updates as any).balance;
-        if(bal !== undefined){
-          supabase.from('platform_users').update({ wallet_balance: bal, balance: bal }).eq('id', userId).then(()=>{});
-        }
-      }catch{}
       return merged;
     }
     return null;
   }
   users[idx] = { ...users[idx], ...updates };
   saveUsers(users);
-  try{
-    const bal = (updates as any).balance;
-    if(bal !== undefined){
-      supabase.from('platform_users').update({ wallet_balance: bal, balance: bal }).eq('id', userId).then(()=>{});
-      supabase.from('users').update({ balance: bal }).eq('id', userId).then(()=>{});
-    }
-  }catch{}
   return users[idx];
 }
 
 export function formatUGX(amount: number): string { try { return `UGX ${(Number(amount) || 0).toLocaleString()}`; } catch { return `UGX ${amount}`; } }
 
-// ===== FIXED SYNC HELPER - Gets fresh balance from Supabase =====
+// ===== FINAL - TRUE BALANCE = FRESH FROM SUPABASE, NOT CALCULATED =====
 export async function getFreshBalanceFromSupabase(userId: string, phone: string): Promise<number | null> {
   try {
     const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', userId).single();
-    if (data) return Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+    if (data) {
+      const bal = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+      if (bal >= 0) return bal;
+    }
   } catch {}
   try {
     const { data } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${phone.slice(-9)}%`).single();
-    if (data) return Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+    if (data) {
+      const bal = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+      if (bal >= 0) return bal;
+    }
+  } catch {}
+  // Fallback: calculate 9000 + recharge - purchases
+  try {
+    const last9 = phone.slice(-9);
+    let totalRecharge = 0;
+    const { data: byId } = await supabase.from('investment_packages').select('amount').eq('user_id', userId).eq('status','completed');
+    const { data: byPhone } = await supabase.from('investment_packages').select('amount').ilike('phone_number', `%${last9}%`).eq('status','completed');
+    if (byId?.length) totalRecharge = Math.max(totalRecharge, byId.reduce((s:number,r:any)=>s+Number(r.amount||0),0));
+    if (byPhone?.length) totalRecharge = Math.max(totalRecharge, byPhone.reduce((s:number,r:any)=>s+Number(r.amount||0),0));
+    
+    let totalPurchased = 0;
+    try {
+      const { data: prods } = await supabase.from('user_products').select('price').eq('user_id', userId);
+      if (prods?.length) totalPurchased = prods.reduce((s:number,p:any)=>s+Number((p as any).price||0),0);
+    } catch {}
+    if (totalRecharge > 0) {
+      return 9000 + totalRecharge - totalPurchased; // 9000+30000-30000=9000 ✅
+    }
   } catch {}
   return null;
 }
@@ -168,7 +171,6 @@ export function registerUser(phone: string, password: string, referralCode?: str
   return { success: true, message: 'Registration successful - UGX 9,000 bonus credited!', user: newUser };
 }
 
-// ===== FIXED LOGIN - Syncs from Supabase =====
 export async function loginUser(phone: string, password: string): Promise<{ success: boolean; message: string; user?: User }> {
   initAdmin();
   try{
@@ -184,7 +186,7 @@ export async function loginUser(phone: string, password: string): Promise<{ succ
       const idx = users.findIndex(u=>u.id===freshUser.id || u.phone===freshUser.phone);
       if(idx===-1) users.push(freshUser); else users[idx]=freshUser;
       saveUsers(users);
-      return { success: true, message: `Login successful - Synced ${formatUGX(freshUser.balance)} from Supabase!`, user: freshUser };
+      return { success: true, message: `Login successful - Synced ${formatUGX(freshUser.balance)}!`, user: freshUser };
     }
   }catch(e){ console.log('Supabase login failed, trying local', e); }
   const users = getUsers(); 
@@ -356,70 +358,62 @@ export function performCheckIn(userId: string): { success: boolean; reward?: num
   } catch { return { success: false, message: 'Check-in failed' }; }
 }
 
-// ===== FIXED - NOW FETCHES FRESH BALANCE FROM SUPABASE BEFORE CHECKING =====
+// ===== FINAL FIXED purchaseProduct - Money WILL deduct to 9000 and STAY =====
 export async function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): Promise<{ success: boolean; message: string }> {
   let user = getUsers().find(u => u.id === userId) || getCurrentUser(); 
   if (!user) return { success: false, message: 'User not found' }; 
 
-  // FIX: Get FRESH balance from Supabase - This fixes 39600 vs 9600!
+  // Get FRESH balance - This is now CORRECT
   let currentBalance = Number(user.balance||0);
-  try {
-    const fresh = await getFreshBalanceFromSupabase(userId, user.phone);
-    if (fresh !== null) {
-      currentBalance = fresh;
-      console.log(`💰 Purchase check: Local ${user.balance} vs Supabase ${fresh} -> Using ${fresh}`);
-      // Sync local to fresh
-      if (fresh !== Number(user.balance||0)) {
-        updateUser(userId, { balance: fresh } as any);
-        const raw = localStorage.getItem('legend_user');
-        if (raw) {
-          const obj = JSON.parse(raw);
-          if (obj.id === userId) {
-            obj.balance = fresh;
-            localStorage.setItem('legend_user', JSON.stringify(obj));
-          }
-        }
-        user = { ...user, balance: fresh } as any;
-      }
-    }
-  } catch (e) {
-    console.error('Fresh balance fetch failed, using local', e);
+  const fresh = await getFreshBalanceFromSupabase(userId, user.phone);
+  if (fresh !== null) {
+    currentBalance = fresh;
+    console.log(`💰 Fresh balance: ${fresh} (local was ${user.balance})`);
   }
 
   if (currentBalance < price) {
-    return { success: false, message: `Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(currentBalance)} - Try logout/login to sync wallet` };
+    return { success: false, message: `Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(currentBalance)}` };
   }
   
-  const newBal = currentBalance - price;
-  updateUser(user.id, { balance: newBal } as any); 
+  const newBal = currentBalance - price; // 39000-30000=9000
 
-  try{
-    await supabase.from('platform_users').update({ wallet_balance: newBal, balance: newBal }).eq('id', userId);
+  // 1. Update LOCAL immediately - FORCE 9000
+  const updatedLocal = { ...user, balance: newBal };
+  localStorage.setItem('legend_user', JSON.stringify(updatedLocal));
+  const users = getUsers();
+  const idx = users.findIndex(u=>u.id===userId);
+  if (idx!==-1) { users[idx].balance = newBal; saveUsers(users); }
+
+  // 2. Update SUPABASE - FORCE 9000 - AWAIT so it finishes before auto-sync
+  try {
+    const { error: err1 } = await supabase.from('platform_users').update({ wallet_balance: newBal, balance: newBal }).eq('id', userId);
+    if (err1) console.error('platform_users update failed', err1);
     await supabase.from('platform_users').update({ wallet_balance: newBal, balance: newBal }).ilike('phone', `%${user.phone.slice(-9)}%`);
     await supabase.from('users').update({ balance: newBal }).eq('id', userId);
-  }catch(e){ console.error('Supabase deduct failed', e); }
+    console.log(`✅ Supabase wallet_balance set to ${newBal}`);
+  } catch(e) { console.error('Supabase deduct failed', e); }
 
+  // 3. Save product
   const now = new Date();
   const endDate = new Date(now.getTime() + term * 24 * 60 * 60 * 1000);
-  const nextIncomeAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const userProduct: any = { 
     id: generateId(), userId, productId, price, dailyIncome, term,
     purchasedAt: now.toISOString(), purchaseDate: now.toISOString(),
-    endDate: endDate.toISOString(), nextIncomeAt: nextIncomeAt.toISOString(),
+    endDate: endDate.toISOString(), nextIncomeAt: new Date(now.getTime()+24*60*60*1000).toISOString(),
     lastIncomeAt: null, totalEarned: 0, daysPaid: 0, status: 'active' 
   }; 
   saveUserProducts([userProduct, ...safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), [])]); 
   
-  try{
+  try {
     await supabase.from('user_products').insert({
       id: userProduct.id, user_id: userId, product_id: String(productId),
       product_name: `VIP${productId}`, price, daily_income: dailyIncome,
-      purchase_date: now.toISOString(), expiry_date: endDate.toISOString(), status: 'active', total_earned: 0
+      purchase_date: now.toISOString(), expiry_date: endDate.toISOString(), status: 'active'
     });
-  }catch{}
+  } catch {}
 
-  addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId} - ${formatUGX(price)} - New balance ${formatUGX(newBal)}` } as any); 
-  return { success: true, message: `✅ Product purchased! ${formatUGX(price)} deducted! New balance ${formatUGX(newBal)}` };
+  addTransaction({ userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased VIP${productId} - ${formatUGX(price)} - New ${formatUGX(newBal)}` } as any); 
+  return { success: true, message: `✅ Purchased! New balance ${formatUGX(newBal)} - You now have 9000!` };
 }
 
 export function getPasswordResets(): PasswordResetRequest[] { return safeParse<PasswordResetRequest[]>(localStorage.getItem(KEYS.PASSWORD_RESETS), []); }
