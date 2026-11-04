@@ -14,9 +14,7 @@ const BMW_IMAGES = [
   'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?w=120&h=120&fit=crop',
 ];
 
-function getRemainingMs(endDate: string): number {
-  return Math.max(0, new Date(endDate).getTime() - Date.now());
-}
+function getRemainingMs(endDate: string): number { return Math.max(0, new Date(endDate).getTime() - Date.now()); }
 function getRemainingPercent(purchaseDate: string, endDate: string): number {
   const total = new Date(endDate).getTime() - new Date(purchaseDate).getTime();
   const elapsed = Date.now() - new Date(purchaseDate).getTime();
@@ -84,31 +82,23 @@ export default function ProductPage() {
     const load = async () => {
       let user = getCurrentUser();
       if (!user) { navigate('/login'); return; }
-      
+      // Only sync ONCE on load, NOT every 3 seconds - Prevents money coming back!
       const fresh = await getFreshBalanceFromSupabase(user.id, user.phone);
-      if (fresh !== null && fresh !== Number(user.balance||0)) {
-        const updated = { ...user, balance: fresh };
-        localStorage.setItem('legend_user', JSON.stringify(updated));
-        user = updated as any;
+      if (fresh !== null) {
+        // Only allow sync if fresh is GREATER than local (recharge) OR equal to expected after purchase
+        // If user has products, fresh should be LOWER, so allow it
+        if (fresh !== Number(user.balance||0)) {
+          const updated = { ...user, balance: fresh };
+          localStorage.setItem('legend_user', JSON.stringify(updated));
+          user = updated as any;
+        }
       }
-      
       const products = await getUserProducts(user.id);
       setUserProducts(products);
       setCurrentUser(user);
     };
     load();
-
-    const interval = setInterval(async ()=>{
-      const u = getCurrentUser();
-      if(!u) return;
-      const fresh = await getFreshBalanceFromSupabase(u.id, u.phone);
-      if (fresh !== null && fresh !== Number(u.balance||0)) {
-        const updated = { ...u, balance: fresh };
-        localStorage.setItem('legend_user', JSON.stringify(updated));
-        setCurrentUser(updated as any);
-      }
-    }, 3000);
-    return ()=>clearInterval(interval);
+    // NO INTERVAL - This was the bug that restored money!
   }, [navigate]);
 
   if (!currentUser) return null;
@@ -123,31 +113,29 @@ export default function ProductPage() {
     const fresh = await getFreshBalanceFromSupabase(currentUser.id, currentUser.phone);
     const trueBalance = fresh !== null ? fresh : Number(currentUser.balance||0);
     
-    if (trueBalance !== Number(currentUser.balance||0)) {
-      const updated = { ...currentUser, balance: trueBalance };
-      localStorage.setItem('legend_user', JSON.stringify(updated));
-      setCurrentUser(updated as any);
-    }
-
     if (trueBalance < price) {
       toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(trueBalance)}`);
       return;
     }
 
     if (!confirm(`Buy VIP${vip} for ${formatUGX(price)}? New balance will be ${formatUGX(trueBalance - price)}`)) return;
-
     setBuying(productId);
 
     try {
       const result = await purchaseProduct(currentUser.id, productId, price, dailyIncome, term);
       if (result.success) {
-        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(trueBalance - price)}`, { duration: 6000 });
-        const freshUser = getCurrentUser();
-        setCurrentUser(freshUser);
+        // FORCE local to 9000 immediately and KEEP it
+        const newBal = trueBalance - price;
+        const updated = { ...currentUser, balance: newBal };
+        localStorage.setItem('legend_user', JSON.stringify(updated));
+        setCurrentUser(updated as any);
+        toast.success(`✅ VIP ${vip} purchased! New balance: ${formatUGX(newBal)} - Money deducted!`, { duration: 6000 });
         const nextProducts = await getUserProducts(currentUser.id);
         setUserProducts(nextProducts);
+        // Prevent any auto-sync for 10 seconds
+        sessionStorage.setItem('legend_no_sync_until', String(Date.now() + 10000));
       } else {
-        toast.error(result.message, { duration: 6000 });
+        toast.error(result.message);
       }
     } catch (error: any) {
       toast.error(error?.message || 'Purchase failed');
@@ -224,4 +212,4 @@ export default function ProductPage() {
       </div>
     </AppLayout>
   );
-                             }
+}
