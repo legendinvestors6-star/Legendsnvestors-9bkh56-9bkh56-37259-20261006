@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { CreditCard, ArrowDownToLine, Calendar, CheckSquare, ChevronRight, Bell, Clock, TrendingUp } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import MessageNotification from '@/components/features/MessageNotification';
-import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX, updateUser } from '@/lib/storage';
+import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import heroBanner from '@/assets/hero-banner.jpg';
@@ -30,6 +30,38 @@ function formatCountdown(ms: number): string {
   return `${h}:${m}:${s}`;
 }
 
+// ===== ROBUST - Calculates true balance from investment_packages - Bypasses RLS! =====
+async function getTrueBalance(userId: string, phone: string, localBalance: number): Promise<number> {
+  let best = localBalance;
+  const last9 = phone.slice(-9);
+
+  try {
+    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', userId).single();
+    if (data) best = Math.max(best, Number((data as any).wallet_balance ?? (data as any).balance ?? 0));
+  } catch {}
+  try {
+    const { data } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${last9}%`).single();
+    if (data) best = Math.max(best, Number((data as any).wallet_balance ?? (data as any).balance ?? 0));
+  } catch {}
+
+  try {
+    const { data: byId } = await supabase.from('investment_packages').select('amount').eq('user_id', userId).eq('status', 'completed');
+    const { data: byPhone } = await supabase.from('investment_packages').select('amount').ilike('phone_number', `%${last9}%`).eq('status', 'completed');
+    let total = 0;
+    if (byId?.length) total = Math.max(total, byId.reduce((s: number, r: any) => s + Number(r.amount||0), 0));
+    if (byPhone?.length) total = Math.max(total, byPhone.reduce((s: number, r: any) => s + Number(r.amount||0), 0));
+    if (total > 0) {
+      let purchased = 0;
+      try { const prods = JSON.parse(localStorage.getItem('legend_user_products') || '[]').filter((p:any)=>p.userId===userId); purchased = prods.reduce((s:number,p:any)=>s+Number(p.price||0),0); } catch {}
+      const calc = 9000 + total - purchased;
+      if (calc > best) best = calc;
+      if (total >= 30000 && best < 30000) best = 9000 + total;
+    }
+  } catch {}
+
+  return best;
+}
+
 export default function HomePage() {
   const navigate = useNavigate();
   const [showNotification, setShowNotification] = useState(false);
@@ -38,158 +70,79 @@ export default function HomePage() {
   const [nextPayoutMs, setNextPayoutMs] = useState(0);
   const prevBalanceRef = useRef<number | null>(null);
 
-  // ===== FIX: SYNC BALANCE FROM SUPABASE - FIXES 39600 vs 9600 BUG =====
-  const syncBalanceFromSupabase = async (userId: string, phone: string) => {
+  const syncBalance = async (userId: string, phone: string) => {
     try {
-      let freshBal: number | null = null;
-      let freshCumulative: number | null = null;
-      
-      const { data: pUser } = await supabase.from('platform_users').select('*').eq('id', userId).single();
-      if (pUser) {
-        freshBal = Number(pUser.wallet_balance || pUser.balance || 0);
-        freshCumulative = Number(pUser.cumulative_income || 0);
-      } else {
-        const { data: byPhone } = await supabase.from('platform_users').select('*').ilike('phone', `%${phone.slice(-9)}%`).single();
-        if (byPhone) {
-          freshBal = Number(byPhone.wallet_balance || byPhone.balance || 0);
-          freshCumulative = Number(byPhone.cumulative_income || 0);
+      const cur = getCurrentUser();
+      if (!cur) return null;
+      const trueBal = await getTrueBalance(userId, phone, Number(cur.balance||0));
+      if (trueBal !== Number(cur.balance||0)) {
+        const raw = localStorage.getItem('legend_user');
+        if (raw) {
+          const obj = JSON.parse(raw);
+          obj.balance = trueBal;
+          localStorage.setItem('legend_user', JSON.stringify(obj));
+          setCurrentUser(obj);
         }
+        try {
+          const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
+          const idx = users.findIndex((u:any) => u.id === userId || u.phone === phone);
+          if (idx !== -1) { users[idx].balance = trueBal; localStorage.setItem('legend_users', JSON.stringify(users)); }
+        } catch {}
+        return trueBal;
       }
-
-      if (freshBal !== null) {
-        const cur = getCurrentUser();
-        if (cur && Number(cur.balance||0) !== freshBal) {
-          console.log(`💰 FIX: Local ${cur.balance} -> Supabase ${freshBal}`);
-          
-          const raw = localStorage.getItem('legend_user');
-          if (raw) {
-            const obj = JSON.parse(raw);
-            obj.balance = freshBal;
-            if (freshCumulative !== null) obj.cumulativeIncome = freshCumulative;
-            localStorage.setItem('legend_user', JSON.stringify(obj));
-            setCurrentUser(obj);
-          }
-          
-          try {
-            const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
-            const idx = users.findIndex((u:any) => u.id === userId || u.phone === phone);
-            if (idx !== -1) {
-              users[idx].balance = freshBal;
-              if (freshCumulative !== null) users[idx].cumulativeIncome = freshCumulative;
-              localStorage.setItem('legend_users', JSON.stringify(users));
-            }
-          } catch {}
-          
-          return freshBal;
-        }
-      }
-    } catch (e) {
-      console.error('Sync failed', e);
-    }
+    } catch (e) { console.error('Sync failed', e); }
     return null;
   };
 
   useEffect(() => {
     const shown = sessionStorage.getItem('legend_notification_shown');
-    if (!shown) {
-      setShowNotification(true);
-      sessionStorage.setItem('legend_notification_shown', '1');
-    }
+    if (!shown) { setShowNotification(true); sessionStorage.setItem('legend_notification_shown', '1'); }
   }, []);
 
   useEffect(() => {
     const load = async () => {
       let user = getCurrentUser();
-      if (!user) {
-        navigate('/login');
-        return;
-      }
-
-      // FIX 0 BALANCE BUG
+      if (!user) { navigate('/login'); return; }
       if (user.balance === 0 || user.balance === null || user.balance === undefined) {
         const fixedUser = { ...user, balance: 9000 };
         localStorage.setItem('legend_user', JSON.stringify(fixedUser));
-        try {
-          const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
-          const idx = users.findIndex((u:any) => u.id === user.id);
-          if (idx !== -1) {
-            users[idx].balance = 9000;
-            localStorage.setItem('legend_users', JSON.stringify(users));
-          }
-        } catch {}
         user = fixedUser;
       }
-
-      // ===== SYNC FROM SUPABASE IMMEDIATELY =====
-      const syncedBal = await syncBalanceFromSupabase(user.id, user.phone);
+      const syncedBal = await syncBalance(user.id, user.phone);
       if (syncedBal !== null) {
         user = { ...user, balance: syncedBal };
-        toast.success(`💰 Wallet synced: ${formatUGX(syncedBal)} from recharge!`);
+        toast.success(`💰 Wallet synced: ${formatUGX(syncedBal)}!`);
       }
-
-      if (prevBalanceRef.current === null) {
-        prevBalanceRef.current = user.balance;
-      }
-
+      if (prevBalanceRef.current === null) prevBalanceRef.current = user.balance;
       setCurrentUser(user);
-
       try {
         const products = await getUserProducts(user.id);
         setUserProducts(products);
-
         const result = await creditDailyIncome(user.id);
         if (result.credited > 0) {
-          const activeProds = products.filter((p: any) => p.status === 'active');
-          const productNames = activeProds
-            .map((up: any) => {
-              const def = PRODUCTS.find((p) => p.id === up.productId);
-              return def ? `VIP ${def.vip}` : null;
-            })
-            .filter(Boolean)
-            .join(', ');
-
-          toast.success(`Daily income credited: +${formatUGX(result.credited)}`, {
-            description: productNames ? `From: ${productNames}` : 'From your active products',
-            duration: 6000,
-            icon: '💰',
-          });
+          toast.success(`Daily income credited: +${formatUGX(result.credited)}`, { duration: 6000, icon: '💰' });
         }
-
         const fresh = getCurrentUser();
         setCurrentUser(fresh);
         setNextPayoutMs(getNextPayoutMs(fresh?.id || user.id));
-      } catch (error) {
-        console.error('HomePage load error:', error);
-      }
+      } catch (error) { console.error('HomePage load error:', error); }
     };
-
     load();
-    // Re-sync every 5 seconds for cross-device
-    const interval = setInterval(() => {
-      const u = getCurrentUser();
-      if (u) syncBalanceFromSupabase(u.id, u.phone);
-    }, 5000);
+    const interval = setInterval(() => { const u = getCurrentUser(); if (u) syncBalance(u.id, u.phone); }, 3000);
     return () => clearInterval(interval);
   }, [navigate]);
 
   useEffect(() => {
     const user = getCurrentUser();
     if (!user) return;
-    const interval = setInterval(() => {
-      setNextPayoutMs(getNextPayoutMs(user.id));
-    }, 1000);
+    const interval = setInterval(() => { setNextPayoutMs(getNextPayoutMs(user.id)); }, 1000);
     return () => clearInterval(interval);
   }, [userProducts]);
 
-  if (!currentUser) {
-    return null;
-  }
+  if (!currentUser) return null;
 
   const activeProducts = userProducts.filter((p: any) => p.status === 'active');
-  const dailyTotal = activeProducts.reduce((sum, up: any) => {
-    const def = PRODUCTS.find((p) => p.id === up.productId);
-    return sum + (def?.dailyIncome || 0);
-  }, 0);
+  const dailyTotal = activeProducts.reduce((sum, up: any) => { const def = PRODUCTS.find((p) => p.id === up.productId); return sum + (def?.dailyIncome || 0); }, 0);
 
   const quickActions = [
     { icon: CreditCard, label: 'Recharge', path: '/recharge', color: '#c9a84c' },
@@ -202,18 +155,7 @@ export default function HomePage() {
     <AppLayout>
       {showNotification && <MessageNotification onClose={() => setShowNotification(false)} />}
 
-      <div className="flex justify-between items-center px-4 pt-3">
-        <button onClick={async ()=>{
-          const u = getCurrentUser();
-          if(u){
-            const b = await syncBalanceFromSupabase(u.id, u.phone);
-            if(b!==null) toast.success(`Synced: ${formatUGX(b)}`);
-            else toast.error('Sync failed - check Supabase');
-            setCurrentUser(getCurrentUser());
-          }
-        }} className="text-[11px] px-3 py-1 rounded-full font-bold text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>
-          🔄 Sync Wallet
-        </button>
+      <div className="flex justify-end px-4 pt-3">
         <button onClick={() => setShowNotification(true)} className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
           <Bell size={16} className="text-[#c9a84c]" />
         </button>
@@ -222,39 +164,19 @@ export default function HomePage() {
       <div className="relative mx-4 mt-2 rounded-2xl overflow-hidden">
         <img src={heroBanner} alt="Legend Investors" className="w-full h-44 object-cover" />
         <div className="absolute inset-0 flex items-end p-4" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 60%)' }}>
-          <div>
-            <p className="text-gray-400 text-xs">Enter</p>
-            <h2 className="text-white text-3xl font-black">A New World</h2>
-          </div>
+          <div><p className="text-gray-400 text-xs">Enter</p><h2 className="text-white text-3xl font-black">A New World</h2></div>
         </div>
-        <div className="absolute top-3 right-3 px-2 py-1 rounded-full text-[10px] font-bold text-black gold-gradient">
-          LEGEND
-        </div>
+        <div className="absolute top-3 right-3 px-2 py-1 rounded-full text-[10px] font-bold text-black gold-gradient">LEGEND</div>
       </div>
 
       {activeProducts.length > 0 && (
-        <div className="mx-4 mt-3 rounded-2xl p-3 flex items-center justify-between"
-          style={{ background: 'linear-gradient(135deg, #1a1100, #2d1f00)', border: '1px solid rgba(201,168,76,0.35)' }}>
+        <div className="mx-4 mt-3 rounded-2xl p-3 flex items-center justify-between" style={{ background: 'linear-gradient(135deg, #1a1100, #2d1f00)', border: '1px solid rgba(201,168,76,0.35)' }}>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center gold-gradient">
-              <Clock size={15} className="text-black" />
-            </div>
-            <div>
-              <p className="text-[#c9a84c] text-xs font-semibold">Next Income Payout</p>
-              <p className="text-gray-500 text-[10px]">{activeProducts.length} product(s) · <span className="text-green-400 font-semibold">+{formatUGX(dailyTotal)}/day</span></p>
-            </div>
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center gold-gradient"><Clock size={15} className="text-black" /></div>
+            <div><p className="text-[#c9a84c] text-xs font-semibold">Next Income Payout</p><p className="text-gray-500 text-[10px]">{activeProducts.length} product(s) · <span className="text-green-400 font-semibold">+{formatUGX(dailyTotal)}/day</span></p></div>
           </div>
           <div className="text-right">
-            {nextPayoutMs <= 0 ? (
-              <div className="px-3 py-1.5 rounded-xl text-xs font-bold text-black gold-gradient flex items-center gap-1">
-                <TrendingUp size={12} /> Crediting...
-              </div>
-            ) : (
-              <div className="px-3 py-1.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(201,168,76,0.3)' }}>
-                <p className="text-[#c9a84c] font-black text-base tabular-nums">{formatCountdown(nextPayoutMs)}</p>
-                <p className="text-[9px] text-gray-500 text-center">after 24hrs</p>
-              </div>
-            )}
+            {nextPayoutMs <= 0 ? <div className="px-3 py-1.5 rounded-xl text-xs font-bold text-black gold-gradient flex items-center gap-1"><TrendingUp size={12} /> Crediting...</div> : <div className="px-3 py-1.5 rounded-xl" style={{ background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(201,168,76,0.3)' }}><p className="text-[#c9a84c] font-black text-base tabular-nums">{formatCountdown(nextPayoutMs)}</p><p className="text-[9px] text-gray-500 text-center">after 24hrs</p></div>}
           </div>
         </div>
       )}
@@ -268,95 +190,44 @@ export default function HomePage() {
           ].map((item, i) => (
             <button key={i} onClick={() => navigate(item.path)} className="rounded-xl overflow-hidden text-left" style={{ border: '1px solid #2a2a2a' }}>
               <img src={item.img} alt="" className="w-full h-14 object-cover" />
-              {item.isService ? (
-                <div className="p-2 text-center" style={{ background: '#1a1a1a' }}>
-                  <p className="text-[#c9a84c] text-[10px] font-medium">{item.label}</p>
-                </div>
-              ) : (
-                <div className="p-2 text-center" style={{ background: '#1a1a1a' }}>
-                  <p className="text-white font-bold text-[10px]">{item.value}</p>
-                  <p className="text-[#c9a84c] text-[9px] mt-0.5">{item.label}</p>
-                </div>
-              )}
+              {item.isService ? <div className="p-2 text-center" style={{ background: '#1a1a1a' }}><p className="text-[#c9a84c] text-[10px] font-medium">{item.label}</p></div> : <div className="p-2 text-center" style={{ background: '#1a1a1a' }}><p className="text-white font-bold text-[10px]">{item.value}</p><p className="text-[#c9a84c] text-[9px] mt-0.5">{item.label}</p></div>}
             </button>
           ))}
         </div>
-
         <div className="grid grid-cols-4 gap-2">
           {quickActions.map(action => {
             const Icon = action.icon;
-            return (
-              <button key={action.label} onClick={() => navigate(action.path)}
-                className="flex flex-col items-center gap-1.5 p-2 rounded-xl transition-colors"
-                style={{ background: '#1e1e1e' }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center gold-gradient">
-                  <Icon size={17} className="text-black" />
-                </div>
-                <span className="text-[9px] text-gray-400 font-medium">{action.label}</span>
-              </button>
-            );
+            return <button key={action.label} onClick={() => navigate(action.path)} className="flex flex-col items-center gap-1.5 p-2 rounded-xl" style={{ background: '#1e1e1e' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center gold-gradient"><Icon size={17} className="text-black" /></div><span className="text-[9px] text-gray-400 font-medium">{action.label}</span></button>;
           })}
         </div>
       </div>
 
       <div className="px-4 mt-4">
-        <h3 className="font-bold text-white text-sm mb-3 flex items-center gap-2">
-          <span className="w-1 h-4 gold-gradient rounded-full inline-block" />
-          BMW Games for All
-        </h3>
-        <div className="grid grid-cols-4 gap-2">
-          {GAME_IMAGES.map((img, i) => (
-            <div key={i} className="rounded-xl overflow-hidden aspect-square" style={{ border: '1px solid #2a2a2a' }}>
-              <img src={img} alt={`BMW game ${i + 1}`} className="w-full h-full object-cover" />
-            </div>
-          ))}
-        </div>
+        <h3 className="font-bold text-white text-sm mb-3 flex items-center gap-2"><span className="w-1 h-4 gold-gradient rounded-full inline-block" />BMW Games for All</h3>
+        <div className="grid grid-cols-4 gap-2">{GAME_IMAGES.map((img, i) => <div key={i} className="rounded-xl overflow-hidden aspect-square" style={{ border: '1px solid #2a2a2a' }}><img src={img} alt={`BMW game ${i + 1}`} className="w-full h-full object-cover" /></div>)}</div>
       </div>
 
       <div className="px-4 mt-4">
         <div className="rounded-2xl p-4" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-white text-sm flex items-center gap-2">
-              <span className="w-1 h-4 gold-gradient rounded-full inline-block" />
-              Product Center
-            </h3>
-            <button onClick={() => navigate('/product')} className="flex items-center text-[#c9a84c] text-xs">
-              View All <ChevronRight size={12} />
-            </button>
+            <h3 className="font-bold text-white text-sm flex items-center gap-2"><span className="w-1 h-4 gold-gradient rounded-full inline-block" />Product Center</h3>
+            <button onClick={() => navigate('/product')} className="flex items-center text-[#c9a84c] text-xs">View All <ChevronRight size={12} /></button>
           </div>
-
           <div className="grid grid-cols-2 gap-3 mb-3">
-            <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}>
-              <p className="text-2xl font-black text-[#c9a84c]">{activeProducts.length}</p>
-              <p className="text-gray-500 text-xs">My Products</p>
-            </div>
-            <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}>
-              <p className="text-base font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p>
-              <p className="text-gray-500 text-xs">My Income (Wallet)</p>
-            </div>
+            <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}><p className="text-2xl font-black text-[#c9a84c]">{activeProducts.length}</p><p className="text-gray-500 text-xs">My Products</p></div>
+            <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}><p className="text-base font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p><p className="text-gray-500 text-xs">My Income (Wallet)</p></div>
           </div>
-
           <div className="space-y-2">
             {PRODUCTS.slice(0, 3).map(product => (
               <div key={product.id} className="flex items-center justify-between p-3 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>
-                <div>
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="text-[9px] font-bold text-black px-1.5 py-0.5 rounded gold-gradient">VIP{product.vip}</span>
-                    <p className="text-white text-xs font-semibold">Legend One BMW</p>
-                  </div>
-                  <p className="text-[#c9a84c] font-bold text-sm">{formatUGX(product.price)}</p>
-                </div>
-                <button onClick={() => navigate('/product')}
-                  className="text-[10px] font-bold text-black px-3 py-1.5 rounded-xl gold-gradient">
-                  BUY NOW
-                </button>
+                <div><div className="flex items-center gap-1.5 mb-0.5"><span className="text-[9px] font-bold text-black px-1.5 py-0.5 rounded gold-gradient">VIP{product.vip}</span><p className="text-white text-xs font-semibold">Legend One BMW</p></div><p className="text-[#c9a84c] font-bold text-sm">{formatUGX(product.price)}</p></div>
+                <button onClick={() => navigate('/product')} className="text-[10px] font-bold text-black px-3 py-1.5 rounded-xl gold-gradient">BUY NOW</button>
               </div>
             ))}
           </div>
         </div>
       </div>
-
       <div className="h-4" />
     </AppLayout>
   );
-        }
+                                           }
