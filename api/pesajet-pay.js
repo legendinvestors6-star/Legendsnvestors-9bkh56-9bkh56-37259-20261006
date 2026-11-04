@@ -1,45 +1,54 @@
-// api/pesajet-pay.js - Sends PIN and removes money after PIN!
+// api/pesajet-pay.js - PesaJet Pay - Uses Recharge Table + Webhook
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
+  if(req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    const { amount, phone, provider, reference } = req.body;
+    const { userId, amount, phoneNumber, paymentMethod } = req.body;
     
-    const cleanPhone = phone.startsWith('0') ? '256' + phone.slice(1) : phone;
+    if(!userId || !amount) return res.status(400).json({ error: 'Missing userId or amount' });
 
-    // CALL PESAJET API - This triggers PIN on user's phone!
-    const pesajetRes = await fetch('https://api.pesajet.com/api/v1/payments/request-to-pay', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.PESAJET_API_KEY}`,
-      },
-      body: JSON.stringify({
-        amount: Number(amount),
-        phone_number: cleanPhone,
-        network: provider.toUpperCase(), // MTN or AIRTEL
-        reference: reference,
-        callback_url: `https://${process.env.VERCEL_URL || req.headers.host}/api/pesajet-callback`,
-        reason: `LEGEND Recharge UGX ${amount}`
-      })
-    });
+    const orderId = 'pesajet-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+    
+    // SAVE TO SUPABASE - This is what Admin PesaJet reads!
+    const { data, error } = await supabase.from('investment_packages').insert({
+      id: orderId,
+      user_id: userId,
+      amount: Number(amount),
+      product_name: 'RECHARGE',
+      status: 'pending',
+      payment_method: paymentMethod || 'MTN',
+      phone_number: phoneNumber || '',
+      submitted_at: new Date().toISOString()
+    }).select();
 
-    const data = await pesajetRes.json();
-    console.log('Pesajet response:', data);
-
-    // If Pesajet not configured, still return success for testing
-    if (!pesajetRes.ok && !process.env.PESAJET_API_KEY) {
-      return res.json({ success: true, message: 'PIN sent (test mode)', reference });
+    if(error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ error: error.message, hint: 'Run SQL to create table + RLS policy' });
     }
 
-    return res.json(data);
-  } catch (e) {
-    console.error(e);
+    console.log('✅ PesaJet RECHARGE saved:', orderId);
+
+    // Here you can call real PesaJet API if you have keys
+    // For now, we return success - Admin will manually confirm after verifying MTN 0756406186
+
+    return res.status(200).json({ 
+      success: true, 
+      orderId, 
+      message: 'PesaJet payment pending - Admin will confirm after verifying MTN 0756406186',
+      data 
+    });
+
+  } catch(e) {
+    console.error('pesajet-pay error:', e);
     return res.status(500).json({ error: e.message });
   }
-}
+                    }
