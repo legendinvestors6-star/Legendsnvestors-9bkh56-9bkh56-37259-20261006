@@ -1,60 +1,59 @@
-import { createClient } from '@supabase/supabase-js'
+// api/payments/create.ts - PesaJet Payment Create - Saves to Recharge table
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default async function handler(req: any, res: any) {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-  if (req.method === 'OPTIONS') return res.status(200).end()
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if(req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    const { amount, phone, userId, provider } = req.body
-    let formatted = String(phone).replace(/\s/g,'').replace('+','')
-    if (formatted.startsWith('0')) formatted = '256' + formatted.slice(1)
+    const { userId, amount, phone, phoneNumber, method, paymentMethod } = req.body;
+    const finalPhone = phone || phoneNumber || '';
+    const finalMethod = method || paymentMethod || 'MTN';
+    const finalUserId = userId || req.body.user_id || 'unknown';
+    const finalAmount = amount || req.body.amount;
 
-    const supabase = createClient(
-      process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-    const reference = `LGD${Date.now()}`
+    if(!finalAmount) return res.status(400).json({ success: false, error: 'Amount required' });
 
-    await supabase.from('recharges').insert([{
-      reference, amount: Number(amount), phone: formatted,
-      user_id: userId, provider, status: 'pending'
-    }])
+    const orderId = `pesajet-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
 
-    const r = await fetch("https://payments.pesajet.com/api/v1/payments", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.PESAJET_PUBLIC_KEY!,
-        "Accept": "application/json"
-      },
-      body: JSON.stringify({
-        amount: Number(amount),
-        phoneNumber: formatted,
-        reference,
-        provider, // airtel or mtn - both work now
-        currency: "UGX"
-      })
-    })
+    console.log('Creating payment:', { orderId, finalUserId, finalAmount, finalPhone });
 
-    const data = await r.json()
-    
-    if (!r.ok) {
-      await supabase.from('recharges').update({ status: 'failed', pesajet_response: JSON.stringify(data) }).eq('reference', reference)
-      return res.status(200).json({ reference, status: 'failed', error: data })
+    // SAVE TO SUPABASE - THIS IS WHAT ADMIN PESAJET READS!
+    const { data, error } = await supabase.from('investment_packages').insert({
+      id: orderId,
+      user_id: finalUserId,
+      amount: Number(finalAmount),
+      product_name: 'RECHARGE',
+      status: 'pending',
+      payment_method: finalMethod,
+      phone_number: finalPhone,
+      submitted_at: new Date().toISOString()
+    }).select();
+
+    if(error){
+      console.error('Supabase error:', error);
+      return res.status(500).json({ success: false, error: error.message, hint: 'Run SQL to create investment_packages table' });
     }
 
-    await supabase.from('recharges').update({ pesajet_id: data.id || data.transactionId, pesajet_response: JSON.stringify(data) }).eq('reference', reference)
+    console.log('✅ Saved to investment_packages:', orderId);
 
-    return res.status(200).json({ 
-      reference, 
-      status: 'pending', 
-      message: 'STK sent! Enter PIN on phone',
-      pesajet: data
-    })
+    // Return success - Admin will manually confirm after checking MTN 0756406186
+    return res.status(200).json({
+      success: true,
+      orderId,
+      id: orderId,
+      message: 'Payment pending - Admin will confirm',
+      data
+    });
 
-  } catch (e: any) {
-    return res.status(500).json({ error: e.message })
+  } catch(e:any){
+    console.error('create.ts error:', e);
+    return res.status(500).json({ success: false, error: e.message });
   }
 }
