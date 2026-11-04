@@ -121,13 +121,13 @@ export function registerUser(phone: string, password: string, referralCode?: str
   let referredBy: string | undefined; 
   if (referralCode) { const referrer = users.find(u => u.referralCode === referralCode.toUpperCase()); if (referrer) referredBy = referrer.id; }
   
-  const BONUS = 9000; // FIXED 9000 BONUS
+  const BONUS = 9000;
   
   const newUser: User = { 
     id: generateId(), 
     phone, 
     password, 
-    balance: BONUS, // 9000 immediately
+    balance: BONUS,
     cumulativeIncome: 0, 
     level: 1, 
     referralCode: generateReferralCode(), 
@@ -139,8 +139,6 @@ export function registerUser(phone: string, password: string, referralCode?: str
   
   saveUsers([...users, newUser]); 
   addTransaction({ userId: newUser.id, type: 'bonus', amount: BONUS, status: 'completed', description: 'Registration bonus - UGX 9,000' } as any);
-  
-  // Also set current user immediately
   setCurrentUser(newUser);
   
   return { success: true, message: 'Registration successful - UGX 9,000 bonus credited!', user: newUser };
@@ -154,7 +152,7 @@ export function getTransactions(userId?: string): Transaction[] { const data = s
 export function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Transaction { const transactions = getTransactions(); const newTx: Transaction = { ...tx, id: generateId(), createdAt: new Date().toISOString() } as any; localStorage.setItem(KEYS.TRANSACTIONS, JSON.stringify([newTx, ...transactions])); return newTx; }
 export function getRechargeOrders(userId?: string): RechargeOrder[] { const all = safeParse<RechargeOrder[]>(localStorage.getItem(KEYS.RECHARGE_ORDERS), []); if (!userId) return all; return all.filter(o => (o as any).userId === userId); }
 export function createRechargeOrder(userId: string, amount: number, paymentMethod: string, phoneNumber: string): RechargeOrder { const orders = getRechargeOrders(); const order: RechargeOrder = { id: generateId(), userId, amount, paymentMethod, phoneNumber, status: 'pending', createdAt: new Date().toISOString() } as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify([order, ...orders])); return order; }
-export function approveRechargeOrder(orderId: string): boolean { const orders = getRechargeOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'completed' as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); addTransaction({ userId: orders[idx].userId, type: 'recharge', amount: orders[idx].amount, status: 'completed', description: 'Recharge approved' } as any); updateUser(orders[idx].userId, { balance: ((orders[idx] as any).amount || 0) + (getUsers().find(u=>u.id===orders[idx].userId)?.balance || 0) } as any); return true; }
+export function approveRechargeOrder(orderId: string): boolean { const orders = getRechargeOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'completed' as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); addTransaction({ userId: orders[idx].userId, type: 'recharge', amount: orders[idx].amount, status: 'completed', description: 'Recharge approved - PesaJet' } as any); updateUser(orders[idx].userId, { balance: ((orders[idx] as any).amount || 0) + (getUsers().find(u=>u.id===orders[idx].userId)?.balance || 0) } as any); return true; }
 export function rejectRechargeOrder(orderId: string): boolean { const orders = getRechargeOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; orders[idx].status = 'rejected' as any; localStorage.setItem(KEYS.RECHARGE_ORDERS, JSON.stringify(orders)); return true; }
 
 export function getWithdrawOrders(userId?: string): WithdrawOrder[] { return safeParse<WithdrawOrder[]>(localStorage.getItem(KEYS.WITHDRAW_ORDERS), []).filter(o => !userId || (o as any).userId === userId); }
@@ -167,47 +165,29 @@ export function approveWithdrawOrder(orderId: string): boolean { const orders = 
 export function rejectWithdrawOrder(orderId: string): boolean { const orders = getWithdrawOrders(); const idx = orders.findIndex(o => o.id === orderId); if (idx === -1) return false; const order = orders[idx]; orders.splice(idx, 1); localStorage.setItem(KEYS.WITHDRAW_ORDERS, JSON.stringify(orders)); updateUser(order.userId, { balance: ((getUsers().find(u=>u.id===order.userId)?.balance||0) + order.amount) } as any); return true; }
 
 export function getUserProducts(userId?: string): UserProduct[] { 
-  // Auto credit daily income check every time we get products
   if (userId) creditDailyIncome(userId);
   return safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []).filter(p => !userId || (p as any).userId === userId); 
 }
 export function saveUserProducts(products: UserProduct[]): void { localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify(products)); }
 
-// FIXED: DAILY INCOME AFTER 24 HOURS, NOT IMMEDIATELY!
 export function creditDailyIncome(userId: string): { credited: number } {
   try {
     const user = getUsers().find(u => u.id === userId) || getCurrentUser(); 
     if (!user || (user as any).id !== userId) return { credited: 0 }; 
-    
     const allProducts = safeParse<any[]>(localStorage.getItem(KEYS.USER_PRODUCTS), []);
     const products = allProducts.filter(p => p.userId === userId && p.status === 'active');
     if (!products.length) return { credited: 0 };
-
     const now = Date.now();
     let totalToCredit = 0;
     let updated = false;
-
     for (const p of products) {
-      // For each product, check if 24hrs passed since last income or purchase
       const purchaseTime = new Date(p.purchasedAt || p.purchaseDate || p.createdAt).getTime();
       const lastCreditTime = p.lastIncomeAt ? new Date(p.lastIncomeAt).getTime() : purchaseTime;
-      const nextIncomeTime = lastCreditTime + 24*60*60*1000; // +24 hours
-
-      // If expired
+      const nextIncomeTime = lastCreditTime + 24*60*60*1000;
       const endTime = new Date(p.endDate || (purchaseTime + (p.term||30)*24*60*60*1000)).getTime();
-      if (now > endTime) {
-        p.status = 'expired';
-        updated = true;
-        continue;
-      }
-
-      // If 24hrs passed, credit income!
+      if (now > endTime) { p.status = 'expired'; updated = true; continue; }
       if (now >= nextIncomeTime) {
-        // Check how many days missed (if user didn't open app)
         const daysMissed = Math.floor((now - lastCreditTime) / (24*60*60*1000));
-        const daysToPay = Math.min(daysMissed, 1); // Pay 1 day at a time to avoid abuse, or pay all missed
-        
-        // For simplicity, pay 1 day per check, but if missed multiple days, pay all missed
         let incomeForThisProduct = 0;
         for (let i = 0; i < daysMissed; i++) {
           const checkTime = lastCreditTime + (i+1)*24*60*60*1000;
@@ -217,7 +197,6 @@ export function creditDailyIncome(userId: string): { credited: number } {
             p.totalEarned = (p.totalEarned || 0) + Number(p.dailyIncome || 0);
           }
         }
-
         if (incomeForThisProduct > 0) {
           totalToCredit += incomeForThisProduct;
           p.lastIncomeAt = new Date(lastCreditTime + daysMissed*24*60*60*1000).toISOString();
@@ -226,32 +205,16 @@ export function creditDailyIncome(userId: string): { credited: number } {
         }
       }
     }
-
     if (totalToCredit > 0) {
-      updateUser(userId, { 
-        balance: (user.balance || 0) + totalToCredit, 
-        cumulativeIncome: (user.cumulativeIncome || 0) + totalToCredit 
-      } as any); 
-      addTransaction({ 
-        userId, 
-        type: 'daily-income', 
-        amount: totalToCredit, 
-        status: 'completed', 
-        description: `Daily income - ${products.length} products - After 24hrs` 
-      } as any);
-      
+      updateUser(userId, { balance: (user.balance || 0) + totalToCredit, cumulativeIncome: (user.cumulativeIncome || 0) + totalToCredit } as any); 
+      addTransaction({ userId, type: 'daily-income', amount: totalToCredit, status: 'completed', description: `Daily income - ${products.length} products - After 24hrs` } as any);
       if (updated) {
-        // Save updated products
         const otherUsersProducts = allProducts.filter(p => p.userId !== userId);
         localStorage.setItem(KEYS.USER_PRODUCTS, JSON.stringify([...products, ...otherUsersProducts]));
       }
     }
-
     return { credited: totalToCredit };
-  } catch (e) { 
-    console.error('creditDailyIncome error', e);
-    return { credited: 0 }; 
-  }
+  } catch (e) { console.error('creditDailyIncome error', e); return { credited: 0 }; }
 }
 
 export function getNextPayoutMs(userId?: string): number { 
@@ -292,19 +255,14 @@ export function performCheckIn(userId: string): { success: boolean; reward?: num
   } catch (e) { return { success: false, message: 'Check-in failed' }; }
 }
 
-// FIXED: PURCHASE - NO IMMEDIATE INCOME! FIRST INCOME AFTER 24HRS
 export function purchaseProduct(userId: string, productId: number, price: number, dailyIncome: number, term: number): { success: boolean; message: string } {
   const user = getUsers().find(u => u.id === userId) || getCurrentUser(); 
   if (!user) return { success: false, message: 'User not found' }; 
   if (user.balance < price) return { success: false, message: 'Insufficient balance' };
-  
-  // Deduct only price, no income yet
   updateUser(user.id, { balance: user.balance - price } as any); 
-  
   const now = new Date();
   const endDate = new Date(now.getTime() + term * 24 * 60 * 60 * 1000);
-  const nextIncomeAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // First income after 24hrs!
-
+  const nextIncomeAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const products = getUserProducts(userId); 
   const userProduct: any = { 
     id: generateId(), 
@@ -314,30 +272,118 @@ export function purchaseProduct(userId: string, productId: number, price: number
     dailyIncome, 
     term, 
     purchasedAt: now.toISOString(),
-    purchaseDate: now.toISOString(), // For countdown
+    purchaseDate: now.toISOString(),
     endDate: endDate.toISOString(),
-    nextIncomeAt: nextIncomeAt.toISOString(), // KEY!
+    nextIncomeAt: nextIncomeAt.toISOString(),
     lastIncomeAt: null,
     totalEarned: 0,
     daysPaid: 0,
     status: 'active' 
   }; 
-  
   saveUserProducts([userProduct, ...safeParse<UserProduct[]>(localStorage.getItem(KEYS.USER_PRODUCTS), [])]); 
   addTransaction({ userId: userId, type: 'purchase', amount: price, status: 'completed', description: `Purchased product ${productId} - First income after 24hrs` } as any); 
-  
   return { success: true, message: `Product purchased! First daily income UGX ${dailyIncome.toLocaleString()} will come after 24 hours automatically every day!` };
 }
 
-export function getGiftCodes(): GiftCode[] { return safeParse<GiftCode[]>(localStorage.getItem(KEYS.GIFT_CODES), []); }
-export function createGiftCode(amount: number, note?: string, expiresAt?: string): GiftCode { const codes = getGiftCodes(); const codeObj: GiftCode = { id: generateId(), code: generateReferralCode(), amount, createdAt: new Date().toISOString(), note: note || '', expiresAt } as any; localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify([codeObj, ...codes])); return codeObj; }
-export function deleteGiftCode(id: string): boolean { const codes = getGiftCodes(); const idx = codes.findIndex(c => c.id === id); if (idx === -1) return false; codes.splice(idx, 1); localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes)); return true; }
 export function getPasswordResets(): PasswordResetRequest[] { return safeParse<PasswordResetRequest[]>(localStorage.getItem(KEYS.PASSWORD_RESETS), []); }
 export function createPasswordResetRequest(phone: string, newPassword: string, note?: string): PasswordResetRequest { const reqs = getPasswordResets(); const req: PasswordResetRequest = { id: generateId(), phone, newPassword, status: 'pending', createdAt: new Date().toISOString(), note }; localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify([req, ...reqs])); return req; }
 export function approvePasswordReset(id: string): boolean { const reqs = getPasswordResets(); const idx = reqs.findIndex(r => r.id === id); if (idx === -1) return false; reqs[idx].status = 'approved'; reqs[idx].resolvedAt = new Date().toISOString(); localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs)); const req = reqs[idx]; const users = getUsers(); const uidx = users.findIndex(u => u.phone === req.phone); if (uidx !== -1) { users[uidx].password = req.newPassword; saveUsers(users); const supaRaw = localStorage.getItem('legend_user'); if (supaRaw) { try { const su = JSON.parse(supaRaw); if (su.phone === req.phone) { su.password = req.newPassword; localStorage.setItem('legend_user', JSON.stringify(su)); } } catch {} } } return true; }
 export function rejectPasswordReset(id: string, note?: string): boolean { const reqs = getPasswordResets(); const idx = reqs.findIndex(r => r.id === id); if (idx === -1) return false; reqs[idx].status = 'rejected'; reqs[idx].resolvedAt = new Date().toISOString(); reqs[idx].note = note || reqs[idx].note; localStorage.setItem(KEYS.PASSWORD_RESETS, JSON.stringify(reqs)); return true; }
+
 export function getTeamMembers(userId: string) { const users = getUsers(); const level1 = users.filter(u => u.referredBy === userId || (u as any).referred_by === userId); const level1Ids = level1.map(u => u.id); const level2 = users.filter(u => level1Ids.includes(u.referredBy as any) || level1Ids.includes((u as any).referred_by)); const level2Ids = level2.map(u => u.id); const level3 = users.filter(u => level2Ids.includes(u.referredBy as any) || level2Ids.includes((u as any).referred_by)); return { level1, level2, level3 }; }
 export function getTeamCommissions(userId: string) { const { level1, level2, level3 } = getTeamMembers(userId); const sum = (arr: User[]) => arr.reduce((s, u) => s + (u.balance || 0), 0); const c1 = sum(level1) * (LEVEL1_RATE || 0.27); const c2 = sum(level2) * (LEVEL2_RATE || 0.02); const c3 = sum(level3) * (LEVEL3_RATE || 0.01); return { level1: Math.floor(c1), level2: Math.floor(c2), level3: Math.floor(c3) }; }
+
+// ===== REDEEM CODES - FIXED - NO MORE d is not a function =====
+export function getGiftCodes(): GiftCode[] { 
+  const raw = localStorage.getItem(KEYS.GIFT_CODES);
+  if(!raw) return [];
+  try {
+    const codes = JSON.parse(raw) as GiftCode[];
+    const now = Date.now();
+    const valid = codes.filter(c => {
+      if(c.usedBy) return true;
+      if(!c.expiresAt) return true;
+      return new Date(c.expiresAt).getTime() > now;
+    });
+    if(valid.length !== codes.length) localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(valid));
+    return valid;
+  } catch { return []; }
+}
+
+export function createGiftCode(amount: number, note?: string, expiresAt?: string, customCode?: string): GiftCode { 
+  const codes = getGiftCodes(); 
+  const codeStr = (customCode?.trim().toUpperCase() || generateReferralCode());
+  if(codes.some(c => c.code === codeStr && !c.usedBy)) throw new Error('Code exists');
+  const codeObj: GiftCode = { 
+    id: generateId(), 
+    code: codeStr, 
+    amount: Number(amount), 
+    createdAt: new Date().toISOString(), 
+    note: note || '', 
+    expiresAt: expiresAt || new Date(Date.now()+30*60*1000).toISOString()
+  }; 
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify([codeObj, ...codes])); 
+  return codeObj; 
+}
+
+export function deleteGiftCode(id: string): boolean { 
+  const codes = getGiftCodes(); 
+  const idx = codes.findIndex(c => c.id === id); 
+  if (idx === -1) return false; 
+  codes.splice(idx, 1); 
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(codes)); 
+  return true; 
+}
+
+export function useGiftCode(code: string, userId: string): { success: boolean; amount?: number; message?: string } {
+  const all = getGiftCodes();
+  const idx = all.findIndex(c => c.code.toUpperCase() === code.toUpperCase());
+  if(idx===-1) return { success:false, message:'Invalid code' };
+  const f = all[idx];
+  if(f.usedBy) return { success:false, message:'Already used' };
+  if(f.expiresAt && new Date(f.expiresAt).getTime() < Date.now()) return { success:false, message:'Expired' };
+  f.usedBy = userId;
+  f.usedAt = new Date().toISOString();
+  localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(all));
+  return { success:true, amount:f.amount };
+}
+
+// FIXES "d is not a function" - THIS WAS MISSING!
+export async function redeemGiftCode(userId: string, enteredCode: string): Promise<{ success: boolean; amount?: number; message?: string }> {
+  try {
+    const trimmed = enteredCode.trim().toUpperCase();
+    if(!trimmed) return { success:false, message:'Enter code' };
+    const all = getGiftCodes();
+    const found = all.find(c => c.code.toUpperCase() === trimmed);
+    if(!found) return { success:false, message:'Invalid gift code - Not found' };
+    if(found.usedBy) return { success:false, message:'Code already used!' };
+    if(found.expiresAt && new Date(found.expiresAt).getTime() < Date.now()) return { success:false, message:'Code expired! (30min limit)' };
+    
+    found.usedBy = userId;
+    found.usedAt = new Date().toISOString();
+    localStorage.setItem(KEYS.GIFT_CODES, JSON.stringify(all));
+
+    const users = getUsers();
+    const uIdx = users.findIndex(u => u.id === userId);
+    if(uIdx!==-1){
+      const u = users[uIdx];
+      const newBal = Number(u.balance||0) + Number(found.amount||0);
+      users[uIdx] = { ...u, balance:newBal, cumulativeIncome: Number((u as any).cumulativeIncome||0)+Number(found.amount||0) } as any;
+      saveUsers(users);
+      try{
+        const raw = localStorage.getItem('legend_user');
+        if(raw){
+          const cu = JSON.parse(raw);
+          if(cu.id===userId){ cu.balance=newBal; cu.cumulativeIncome=Number(cu.cumulativeIncome||0)+Number(found.amount||0); localStorage.setItem('legend_user', JSON.stringify(cu)); }
+        }
+      }catch{}
+    }
+    return { success:true, amount:found.amount, message:`Success! +UGX ${Number(found.amount).toLocaleString()} added!` };
+  } catch(e:any){
+    console.error(e);
+    return { success:false, message:e.message||'Redeem failed' };
+  }
+}
 
 export const createPasswordReset = createPasswordResetRequest;
 export function getPasswordResetStatus(phone: string) {
