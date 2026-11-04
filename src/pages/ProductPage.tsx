@@ -6,6 +6,12 @@ import { getCurrentUser, getUserProducts, purchaseProduct, formatUGX } from '@/l
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import type { UserProduct } from '@/types';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  (import.meta as any).env?.VITE_SUPABASE_URL || '',
+  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
+);
 
 const BMW_IMAGES = [
   'https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?w=120&h=120&fit=crop',
@@ -35,7 +41,6 @@ function getRemainingPercent(purchaseDate: string, endDate: string): number {
   return Math.max(0, Math.min(100, ((total - elapsed) / total) * 100));
 }
 
-// Active product card with live countdown
 function ActiveProductCard({ userProduct, productDef }: { userProduct: UserProduct; productDef: typeof PRODUCTS[0] }) {
   const [remainingMs, setRemainingMs] = useState(() => getRemainingMs(userProduct.endDate));
   const [expired, setExpired] = useState(remainingMs <= 0);
@@ -67,89 +72,34 @@ function ActiveProductCard({ userProduct, productDef }: { userProduct: UserProdu
     }}>
       <div className="flex gap-3 p-4">
         <div className="relative flex-shrink-0">
-          <img
-            src={BMW_IMAGES[productDef.vip % BMW_IMAGES.length]}
-            alt={productDef.name}
-            className="w-20 h-20 rounded-xl object-cover"
-            style={{ border: '1px solid #2a2a2a', filter: expired ? 'grayscale(1) opacity(0.5)' : 'none' }}
-          />
-          <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">
-            VIP{productDef.vip}
-          </div>
+          <img src={BMW_IMAGES[productDef.vip % BMW_IMAGES.length]} alt={productDef.name} className="w-20 h-20 rounded-xl object-cover" style={{ border: '1px solid #2a2a2a', filter: expired ? 'grayscale(1) opacity(0.5)' : 'none' }} />
+          <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">VIP{productDef.vip}</div>
         </div>
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
             <h3 className="text-white font-bold text-sm">{productDef.name}</h3>
-            {expired ? (
-              <span className="flex items-center gap-1 text-[10px] font-semibold text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-                <XCircle size={10} /> Expired
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-[10px] font-semibold text-green-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}>
-                <CheckCircle size={10} /> Active
-              </span>
-            )}
+            {expired ? <span className="flex items-center gap-1 text-[10px] font-semibold text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}><XCircle size={10} /> Expired</span> : <span className="flex items-center gap-1 text-[10px] font-semibold text-green-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}><CheckCircle size={10} /> Active</span>}
           </div>
-
           <div className="space-y-0.5 mb-2">
-            <div className="flex justify-between text-xs">
-              <span className="text-gray-500">Daily income:</span>
-              <span className="text-[#c9a84c] font-semibold">{formatUGX(productDef.dailyIncome)}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-gray-500">Purchase:</span>
-              <span className="text-gray-400">{new Date(userProduct.purchaseDate).toLocaleDateString()}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-gray-500">Expires:</span>
-              <span className="text-gray-400">{new Date(userProduct.endDate).toLocaleDateString()}</span>
-            </div>
+            <div className="flex justify-between text-xs"><span className="text-gray-500">Daily income:</span><span className="text-[#c9a84c] font-semibold">{formatUGX(productDef.dailyIncome)}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-gray-500">Purchase:</span><span className="text-gray-400">{new Date(userProduct.purchaseDate).toLocaleDateString()}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-gray-500">Expires:</span><span className="text-gray-400">{new Date(userProduct.endDate).toLocaleDateString()}</span></div>
           </div>
-
           {!expired ? (
             <div className="rounded-xl p-2" style={{ background: 'rgba(0,0,0,0.4)' }}>
-              <div className="flex items-center gap-1 mb-1">
-                <Timer size={10} className="text-[#c9a84c]" />
-                <p className="text-[10px] text-gray-500">Time remaining</p>
-              </div>
-              <div className="flex gap-1">
-                {[
-                  { val: days, unit: 'd' },
-                  { val: hours, unit: 'h' },
-                  { val: mins, unit: 'm' },
-                  { val: secs, unit: 's' },
-                ].map((item, i) => (
+              <div className="flex items-center gap-1 mb-1"><Timer size={10} className="text-[#c9a84c]" /><p className="text-[10px] text-gray-500">Time remaining</p></div>
+              <div className="flex gap-1">{[{ val: days, unit: 'd' },{ val: hours, unit: 'h' },{ val: mins, unit: 'm' },{ val: secs, unit: 's' }].map((item, i) => (
                   <div key={i} className="flex items-end gap-0.5">
-                    <div className="w-7 h-7 rounded-lg flex items-center justify-center font-black text-sm tabular-nums"
-                      style={{ background: 'rgba(201,168,76,0.15)', color: '#c9a84c', border: '1px solid rgba(201,168,76,0.3)' }}>
-                      {String(item.val).padStart(2, '0')}
-                    </div>
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center font-black text-sm tabular-nums" style={{ background: 'rgba(201,168,76,0.15)', color: '#c9a84c', border: '1px solid rgba(201,168,76,0.3)' }}>{String(item.val).padStart(2, '0')}</div>
                     <span className="text-gray-600 text-[9px] mb-0.5">{item.unit}</span>
                     {i < 3 && <span className="text-[#c9a84c] font-bold text-xs mb-0.5 mx-0.5">:</span>}
                   </div>
-                ))}
-              </div>
+                ))}</div>
             </div>
-          ) : (
-            <div className="rounded-xl p-2 text-center" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
-              <p className="text-red-400 text-xs font-semibold">Term ended — no more daily income</p>
-            </div>
-          )}
+          ) : <div className="rounded-xl p-2 text-center" style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}><p className="text-red-400 text-xs font-semibold">Term ended — no more daily income</p></div>}
         </div>
       </div>
-
-      {!expired && (
-        <div className="px-4 pb-3">
-          <div className="flex justify-between text-[10px] text-gray-600 mb-1">
-            <span>Progress</span>
-            <span>{(100 - percent).toFixed(1)}% elapsed</span>
-          </div>
-          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#1e1e1e' }}>
-            <div className="h-full rounded-full gold-gradient transition-all" style={{ width: `${100 - percent}%` }} />
-          </div>
-        </div>
-      )}
+      {!expired && <div className="px-4 pb-3"><div className="flex justify-between text-[10px] text-gray-600 mb-1"><span>Progress</span><span>{(100 - percent).toFixed(1)}% elapsed</span></div><div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#1e1e1e' }}><div className="h-full rounded-full gold-gradient transition-all" style={{ width: `${100 - percent}%` }} /></div></div>}
     </div>
   );
 }
@@ -161,40 +111,77 @@ export default function ProductPage() {
   const [buying, setBuying] = useState<number | null>(null);
   const [showMyProducts, setShowMyProducts] = useState(false);
 
+  // ===== FIX: SYNC BALANCE FROM SUPABASE - FIXES 39600 vs 9600 BUG =====
   useEffect(() => {
     const load = async () => {
-      const user = getCurrentUser();
+      let user = getCurrentUser();
       if (!user) {
         navigate('/login');
         return;
       }
 
+      // Sync from Supabase FIRST
+      try {
+        let freshBal: number | null = null;
+        const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', user.id).single();
+        if (data) freshBal = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+        else {
+          const { data: byPhone } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${user.phone.slice(-9)}%`).single();
+          if (byPhone) freshBal = Number((byPhone as any).wallet_balance ?? (byPhone as any).balance ?? 0);
+        }
+        if (freshBal !== null && freshBal !== Number(user.balance||0)) {
+          console.log(`💰 ProductPage sync: ${user.balance} -> ${freshBal}`);
+          const updated = { ...user, balance: freshBal };
+          localStorage.setItem('legend_user', JSON.stringify(updated));
+          try {
+            const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
+            const idx = users.findIndex((u:any)=>u.id===user.id);
+            if(idx!==-1){ users[idx].balance = freshBal; localStorage.setItem('legend_users', JSON.stringify(users)); }
+          } catch {}
+          user = updated as any;
+          toast.success(`💰 Wallet synced: ${formatUGX(freshBal)}`);
+        }
+      } catch {}
+
       const products = await getUserProducts(user.id);
       setUserProducts(products);
       setCurrentUser(user);
     };
-
     load();
   }, [navigate]);
 
   if (!currentUser) return null;
 
-  const normalizedProducts = userProducts.map(up => ({
-    ...up,
-    status: getRemainingMs(up.endDate) <= 0 ? 'expired' as const : up.status,
-  }));
-
+  const normalizedProducts = userProducts.map(up => ({ ...up, status: getRemainingMs(up.endDate) <= 0 ? 'expired' as const : up.status }));
   const activeProducts = normalizedProducts.filter(p => p.status === 'active');
   const expiredProducts = normalizedProducts.filter(p => p.status === 'expired');
 
+  // ===== FIXED BUY - Fetches FRESH balance from Supabase before checking =====
   const handleBuy = async (productId: number, price: number, dailyIncome: number, term: number, vip: number) => {
     if (!currentUser) return;
 
-    if (currentUser.balance < price) {
-      toast.error('Insufficient balance. Please recharge first.');
-      navigate('/recharge');
+    // Get FRESH balance from Supabase - Fixes 39600 vs 9600!
+    let currentBalance = Number(currentUser.balance||0);
+    try {
+      const { data } = await supabase.from('platform_users').select('wallet_balance,balance').eq('id', currentUser.id).single();
+      if (data) currentBalance = Number((data as any).wallet_balance ?? (data as any).balance ?? 0);
+      else {
+        const { data: byPhone } = await supabase.from('platform_users').select('wallet_balance,balance').ilike('phone', `%${currentUser.phone.slice(-9)}%`).single();
+        if (byPhone) currentBalance = Number((byPhone as any).wallet_balance ?? 0);
+      }
+      if (currentBalance !== Number(currentUser.balance||0)) {
+        const updated = { ...currentUser, balance: currentBalance };
+        localStorage.setItem('legend_user', JSON.stringify(updated));
+        setCurrentUser(updated as any);
+      }
+    } catch {}
+
+    if (currentBalance < price) {
+      toast.error(`Insufficient balance! Need ${formatUGX(price)} but you have ${formatUGX(currentBalance)} - Logout/login to sync`, { duration: 5000 });
       return;
     }
+
+    if (!confirm(`Buy VIP${vip} for ${formatUGX(price)}? New balance will be ${formatUGX(currentBalance - price)}`)) return;
 
     setBuying(productId);
 
@@ -202,13 +189,13 @@ export default function ProductPage() {
       const result = await purchaseProduct(currentUser.id, productId, price, dailyIncome, term);
 
       if (result.success) {
-        toast.success(`VIP ${vip} purchased! Daily income: +${formatUGX(dailyIncome)}`);
+        toast.success(`✅ VIP ${vip} purchased! ${formatUGX(price)} deducted! New balance: ${formatUGX(currentBalance - price)} - Daily +${formatUGX(dailyIncome)}`, { duration: 6000 });
         const freshUser = getCurrentUser();
         setCurrentUser(freshUser);
         const nextProducts = await getUserProducts(currentUser.id);
         setUserProducts(nextProducts);
       } else {
-        toast.error(result.message);
+        toast.error(result.message, { duration: 5000 });
       }
     } catch (error: any) {
       toast.error(error?.message || 'Purchase failed');
@@ -235,7 +222,19 @@ export default function ProductPage() {
         </div>
         <div className="text-right">
           <p className="text-xl font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p>
-          <button onClick={() => navigate('/records')} className="text-gray-500 text-xs">My income &gt;</button>
+          <button onClick={async ()=>{
+            const cur = getCurrentUser();
+            if(!cur) return;
+            try{
+              const { data } = await supabase.from('platform_users').select('wallet_balance').eq('id', cur.id).single();
+              if(data){
+                const fresh = Number((data as any).wallet_balance||0);
+                localStorage.setItem('legend_user', JSON.stringify({...cur, balance: fresh}));
+                setCurrentUser({...cur, balance: fresh} as any);
+                toast.success(`Synced: ${formatUGX(fresh)}`);
+              }
+            }catch{}
+          }} className="text-[#c9a84c] text-[10px] border border-[#c9a84c] px-2 py-0.5 rounded-full">🔄 Sync • My income &gt;</button>
         </div>
       </div>
 
@@ -244,13 +243,8 @@ export default function ProductPage() {
           <div className="flex items-center gap-2 mb-3">
             <Clock size={14} className="text-[#c9a84c]" />
             <h3 className="text-white font-bold text-sm">My Products</h3>
-            {expiredProducts.length > 0 && (
-              <span className="text-[10px] text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)' }}>
-                {expiredProducts.length} expired
-              </span>
-            )}
+            {expiredProducts.length > 0 && <span className="text-[10px] text-red-400 px-2 py-0.5 rounded-full" style={{ background: 'rgba(239,68,68,0.1)' }}>{expiredProducts.length} expired</span>}
           </div>
-
           {normalizedProducts.map(up => {
             const def = PRODUCTS.find(p => p.id === up.productId);
             if (!def) return null;
@@ -271,42 +265,21 @@ export default function ProductPage() {
           <div key={product.id} className="rounded-2xl overflow-hidden" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
             <div className="flex gap-3 p-4">
               <div className="relative flex-shrink-0">
-                <img
-                  src={BMW_IMAGES[i % BMW_IMAGES.length]}
-                  alt={product.name}
-                  className="w-24 h-24 rounded-xl object-cover"
-                  style={{ border: '1px solid #2a2a2a' }}
-                />
-                <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">
-                  VIP{product.vip}
-                </div>
+                <img src={BMW_IMAGES[i % BMW_IMAGES.length]} alt={product.name} className="w-24 h-24 rounded-xl object-cover" style={{ border: '1px solid #2a2a2a' }} />
+                <div className="absolute top-1 left-1 text-[9px] font-black text-black px-1.5 py-0.5 rounded-full gold-gradient">VIP{product.vip}</div>
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-white font-bold text-sm mb-2">{product.name}</h3>
                 <p className="text-[#c9a84c] font-black text-lg">{formatUGX(product.price)}</p>
                 <div className="mt-1 space-y-0.5">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-500">Term:</span>
-                    <span className="text-white font-medium">{product.term}-day</span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-500">Daily income:</span>
-                    <span className="text-[#c9a84c] font-semibold">{formatUGX(product.dailyIncome)}</span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-gray-500">Total income:</span>
-                    <span className="text-white font-medium">{formatUGX(product.totalIncome)}</span>
-                  </div>
+                  <div className="flex justify-between text-xs"><span className="text-gray-500">Term:</span><span className="text-white font-medium">{product.term}-day</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-gray-500">Daily income:</span><span className="text-[#c9a84c] font-semibold">{formatUGX(product.dailyIncome)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-gray-500">Total income:</span><span className="text-white font-medium">{formatUGX(product.totalIncome)}</span></div>
                 </div>
               </div>
             </div>
-            <button
-              onClick={() => handleBuy(product.id, product.price, product.dailyIncome, product.term, product.vip)}
-              disabled={buying === product.id}
-              className="w-full py-3.5 font-bold text-black text-sm gold-gradient disabled:opacity-60 flex items-center justify-center gap-2"
-            >
-              <ShoppingBag size={16} />
-              {buying === product.id ? 'Processing...' : 'BUY NOW'}
+            <button onClick={() => handleBuy(product.id, product.price, product.dailyIncome, product.term, product.vip)} disabled={buying === product.id} className="w-full py-3.5 font-bold text-black text-sm gold-gradient disabled:opacity-60 flex items-center justify-center gap-2">
+              <ShoppingBag size={16} />{buying === product.id ? 'Processing...' : 'BUY NOW'}
             </button>
           </div>
         ))}
