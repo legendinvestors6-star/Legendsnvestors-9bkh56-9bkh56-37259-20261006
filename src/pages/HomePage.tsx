@@ -3,10 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { CreditCard, ArrowDownToLine, Calendar, CheckSquare, ChevronRight, Bell, Clock, TrendingUp } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import MessageNotification from '@/components/features/MessageNotification';
-import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX } from '@/lib/storage';
+import { getCurrentUser, getUserProducts, creditDailyIncome, getNextPayoutMs, formatUGX, updateUser } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 import { toast } from 'sonner';
 import heroBanner from '@/assets/hero-banner.jpg';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  (import.meta as any).env?.VITE_SUPABASE_URL || '',
+  (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
+);
 
 const GAME_IMAGES = [
   'https://images.unsplash.com/photo-1603584173870-7f23fdae1b7a?w=200&h=150&fit=crop',
@@ -32,6 +38,57 @@ export default function HomePage() {
   const [nextPayoutMs, setNextPayoutMs] = useState(0);
   const prevBalanceRef = useRef<number | null>(null);
 
+  // ===== FIX: SYNC BALANCE FROM SUPABASE - FIXES 39600 vs 9600 BUG =====
+  const syncBalanceFromSupabase = async (userId: string, phone: string) => {
+    try {
+      let freshBal: number | null = null;
+      let freshCumulative: number | null = null;
+      
+      const { data: pUser } = await supabase.from('platform_users').select('*').eq('id', userId).single();
+      if (pUser) {
+        freshBal = Number(pUser.wallet_balance || pUser.balance || 0);
+        freshCumulative = Number(pUser.cumulative_income || 0);
+      } else {
+        const { data: byPhone } = await supabase.from('platform_users').select('*').ilike('phone', `%${phone.slice(-9)}%`).single();
+        if (byPhone) {
+          freshBal = Number(byPhone.wallet_balance || byPhone.balance || 0);
+          freshCumulative = Number(byPhone.cumulative_income || 0);
+        }
+      }
+
+      if (freshBal !== null) {
+        const cur = getCurrentUser();
+        if (cur && Number(cur.balance||0) !== freshBal) {
+          console.log(`💰 FIX: Local ${cur.balance} -> Supabase ${freshBal}`);
+          
+          const raw = localStorage.getItem('legend_user');
+          if (raw) {
+            const obj = JSON.parse(raw);
+            obj.balance = freshBal;
+            if (freshCumulative !== null) obj.cumulativeIncome = freshCumulative;
+            localStorage.setItem('legend_user', JSON.stringify(obj));
+            setCurrentUser(obj);
+          }
+          
+          try {
+            const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
+            const idx = users.findIndex((u:any) => u.id === userId || u.phone === phone);
+            if (idx !== -1) {
+              users[idx].balance = freshBal;
+              if (freshCumulative !== null) users[idx].cumulativeIncome = freshCumulative;
+              localStorage.setItem('legend_users', JSON.stringify(users));
+            }
+          } catch {}
+          
+          return freshBal;
+        }
+      }
+    } catch (e) {
+      console.error('Sync failed', e);
+    }
+    return null;
+  };
+
   useEffect(() => {
     const shown = sessionStorage.getItem('legend_notification_shown');
     if (!shown) {
@@ -48,48 +105,26 @@ export default function HomePage() {
         return;
       }
 
-      // FIX 0 BALANCE BUG - Auto give 9000 bonus if balance is 0
+      // FIX 0 BALANCE BUG
       if (user.balance === 0 || user.balance === null || user.balance === undefined) {
-        console.log('Fixing 0 balance -> 9000 bonus');
         const fixedUser = { ...user, balance: 9000 };
-        
-        // Fix legend_user
         localStorage.setItem('legend_user', JSON.stringify(fixedUser));
-        
-        // Fix legend_users list
         try {
           const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
           const idx = users.findIndex((u:any) => u.id === user.id);
           if (idx !== -1) {
             users[idx].balance = 9000;
             localStorage.setItem('legend_users', JSON.stringify(users));
-          } else {
-            users.push(fixedUser);
-            localStorage.setItem('legend_users', JSON.stringify(users));
           }
         } catch {}
-
-        // Add bonus transaction if not exists
-        try {
-          const txKey = 'legend_transactions';
-          const txs = JSON.parse(localStorage.getItem(txKey) || '[]');
-          const hasBonus = txs.some((t:any) => t.userId === user.id && t.type === 'bonus');
-          if (!hasBonus) {
-            const bonusTx = {
-              id: Math.random().toString(36).slice(2,11) + Date.now().toString(36),
-              userId: user.id,
-              type: 'bonus',
-              amount: 9000,
-              status: 'completed',
-              description: 'Registration bonus - UGX 9,000',
-              createdAt: new Date().toISOString()
-            };
-            localStorage.setItem(txKey, JSON.stringify([bonusTx, ...txs]));
-          }
-        } catch {}
-
         user = fixedUser;
-        toast.success('Welcome bonus credited: UGX 9,000!');
+      }
+
+      // ===== SYNC FROM SUPABASE IMMEDIATELY =====
+      const syncedBal = await syncBalanceFromSupabase(user.id, user.phone);
+      if (syncedBal !== null) {
+        user = { ...user, balance: syncedBal };
+        toast.success(`💰 Wallet synced: ${formatUGX(syncedBal)} from recharge!`);
       }
 
       if (prevBalanceRef.current === null) {
@@ -129,17 +164,20 @@ export default function HomePage() {
     };
 
     load();
+    // Re-sync every 5 seconds for cross-device
+    const interval = setInterval(() => {
+      const u = getCurrentUser();
+      if (u) syncBalanceFromSupabase(u.id, u.phone);
+    }, 5000);
+    return () => clearInterval(interval);
   }, [navigate]);
 
-  // LIVE COUNTDOWN TIMER - Updates every second
   useEffect(() => {
     const user = getCurrentUser();
     if (!user) return;
-    
     const interval = setInterval(() => {
       setNextPayoutMs(getNextPayoutMs(user.id));
     }, 1000);
-    
     return () => clearInterval(interval);
   }, [userProducts]);
 
@@ -164,7 +202,18 @@ export default function HomePage() {
     <AppLayout>
       {showNotification && <MessageNotification onClose={() => setShowNotification(false)} />}
 
-      <div className="flex justify-end px-4 pt-3">
+      <div className="flex justify-between items-center px-4 pt-3">
+        <button onClick={async ()=>{
+          const u = getCurrentUser();
+          if(u){
+            const b = await syncBalanceFromSupabase(u.id, u.phone);
+            if(b!==null) toast.success(`Synced: ${formatUGX(b)}`);
+            else toast.error('Sync failed - check Supabase');
+            setCurrentUser(getCurrentUser());
+          }
+        }} className="text-[11px] px-3 py-1 rounded-full font-bold text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>
+          🔄 Sync Wallet
+        </button>
         <button onClick={() => setShowNotification(true)} className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
           <Bell size={16} className="text-[#c9a84c]" />
         </button>
@@ -283,7 +332,7 @@ export default function HomePage() {
             </div>
             <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}>
               <p className="text-base font-black text-[#c9a84c]">{formatUGX(currentUser.balance)}</p>
-              <p className="text-gray-500 text-xs">My Income</p>
+              <p className="text-gray-500 text-xs">My Income (Wallet)</p>
             </div>
           </div>
 
@@ -310,4 +359,4 @@ export default function HomePage() {
       <div className="h-4" />
     </AppLayout>
   );
-      }
+        }
