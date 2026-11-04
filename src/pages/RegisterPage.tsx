@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
-import { REGISTRATION_BONUS } from '@/constants/products';
+
+const REGISTRATION_BONUS = 9000;
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -53,7 +54,7 @@ export default function RegisterPage() {
       }
 
       if (existingUser) {
-        toast.error('Phone already registered. Please log in.');
+        toast.error('Phone already registered! Please log in.');
         navigate('/login');
         return;
       }
@@ -89,11 +90,12 @@ export default function RegisterPage() {
       const userObj = {
         id: data.id,
         phone: data.phone,
+        password,
         name: data.full_name || data.name || cleanName,
         balance: Number(data.balance ?? REGISTRATION_BONUS),
         level: data.level ?? 1,
         referralCode: data.referral_code ?? '',
-        cumulativeIncome: Number(data.cumulative_income ?? 0),
+        cumulativeIncome: Number(data.total_earnings ?? 0),
       };
 
       localStorage.setItem('legend_user', JSON.stringify(userObj));
@@ -101,9 +103,7 @@ export default function RegisterPage() {
       localStorage.setItem('user_id', String(data.id));
       localStorage.setItem('phone', String(data.phone));
 
-      toast.success(
-        `Account created! ${formatUGX(REGISTRATION_BONUS)} registration bonus credited.`
-      );
+      toast.success('Account created! UGX 9,000 bonus credited.');
       navigate('/home');
     } catch (error: any) {
       console.error('Registration failed:', error);
@@ -211,6 +211,7 @@ export default function RegisterPage() {
         </div>
 
         <button
+          type="button"
           onClick={handleRegister}
           disabled={loading}
           className="w-full py-4 rounded-xl font-bold text-black text-base mt-6 disabled:opacity-60"
@@ -229,7 +230,3 @@ export default function RegisterPage() {
     </div>
   );
 }
-
-function formatUGX(amount: number): string {
-  return `UGX ${Number(amount || 0).toLocaleString('en-UG')}`;
-        }
