@@ -1,16 +1,38 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Phone, Wallet } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { Link, useNavigate } from 'react-router-dom';
 
-const formatId = () =>
-  Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
+type RechargeStatus =
+  | 'idle'
+  | 'loading'
+  | 'verifying'
+  | 'success'
+  | 'failed'
+  | 'timeout';
+
+const MIN_AMOUNT = 30000;
+const MAX_AMOUNT = 1500000;
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 40;
+
+function formatId(): string {
+  return (
+    Math.random().toString(36).slice(2, 11) +
+    Date.now().toString(36)
+  );
+}
 
 function getCurrentUserId(): string | null {
   try {
     const raw = localStorage.getItem('legend_user');
-    if (raw) return JSON.parse(raw).id;
+
+    if (raw) {
+      const user = JSON.parse(raw);
+      if (user?.id) return String(user.id);
+    }
+
     return (
       localStorage.getItem('legend_current_user') ||
       localStorage.getItem('user_id')
@@ -20,211 +42,241 @@ function getCurrentUserId(): string | null {
   }
 }
 
-// FIX: 077... -> 25677... for PesaJet / MTN / Airtel
-function formatPhone256(p: string): string {
-  let s = String(p || '').trim().replace(/\s+/g, '');
-  if (s.startsWith('+')) s = s.slice(1);
-  if (s.startsWith('0')) s = '256' + s.slice(1);
-  return s;
-}
-function formatPhone07(p: string): string {
-  let s = String(p || '').trim().replace(/\s+/g, '');
-  if (s.startsWith('+256')) return '0' + s.slice(4);
-  if (s.startsWith('256')) return '0' + s.slice(3);
-  return s;
-}
-
 export default function RechargePage() {
   const navigate = useNavigate();
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollAttempts = useRef(0);
+
   const [amount, setAmount] = useState('30000');
   const [phone, setPhone] = useState('');
   const [provider, setProvider] = useState<'mtn' | 'airtel'>('airtel');
-  const [status, setStatus] =
-    useState<'idle' | 'loading' | 'verifying' | 'success'>('idle');
+  const [status, setStatus] = useState<RechargeStatus>('idle');
   const [currentBalance, setCurrentBalance] = useState(0);
   const [orderId, setOrderId] = useState('');
-  const pollingRef = useRef<any>(null);
 
-  // FIX: Load REAL balance from Supabase, not stale localStorage 9000
   useEffect(() => {
-    const load = async () => {
-      try {
-        const raw = localStorage.getItem('legend_user');
-        if (!raw) return;
-        const u = JSON.parse(raw);
-        if (u.phone) setPhone(u.phone);
-        // Try Supabase first
-        const { data } = await supabase.from('users').select('balance').eq('id', u.id).maybeSingle();
-        if (data) {
-          setCurrentBalance(Number((data as any).balance || 0));
-          u.balance = Number((data as any).balance || 0);
-          localStorage.setItem('legend_user', JSON.stringify(u));
-        } else {
-          setCurrentBalance(Number(u.balance || 0));
-        }
-      } catch {}
+    try {
+      const raw = localStorage.getItem('legend_user');
+
+      if (raw) {
+        const user = JSON.parse(raw);
+        setCurrentBalance(Number(user.balance) || 0);
+        if (user.phone) setPhone(String(user.phone));
+      }
+    } catch {
+      // Ignore malformed local profile data.
+    }
+
+    return () => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-    load();
-    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, []);
 
-  const handleRecharge = async () => {
-    if (!amount || Number(amount) < 1000) {
-      toast.error('Enter valid amount');
-      return;
+  const stopPolling = () => {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
     }
-    if (Number(amount) < 1000 || Number(amount) > 1500000) {
-      toast.error('Min UGX 1,000 • Max 1,500,000');
+  };
+
+  const refreshBalance = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('users')
+      .select('balance')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Could not refresh wallet balance:', error);
       return;
     }
 
-    if (!phone || phone.length < 10) {
-      toast.error('Enter phone 07XXXXXXXX');
+    if (!data) return;
+
+    const balance = Number(data.balance) || 0;
+    setCurrentBalance(balance);
+
+    try {
+      const raw = localStorage.getItem('legend_user');
+      if (raw) {
+        const user = JSON.parse(raw);
+        if (String(user.id) === userId) {
+          user.balance = balance;
+          localStorage.setItem('legend_user', JSON.stringify(user));
+        }
+      }
+    } catch {
+      // The database remains the source of truth.
+    }
+  };
+
+  const pollOrderStatus = async (id: string, userId: string) => {
+    pollAttempts.current += 1;
+
+    if (pollAttempts.current > MAX_POLL_ATTEMPTS) {
+      setStatus('timeout');
+      toast.error('Still waiting for payment confirmation. Check Recharge Status.');
+      return;
+    }
+
+    const { data: order, error } = await supabase
+      .from('recharge_orders')
+      .select('status')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Recharge status check failed:', error);
+      pollTimer.current = setTimeout(
+        () => void pollOrderStatus(id, userId),
+        POLL_INTERVAL_MS
+      );
+      return;
+    }
+
+    if (!order) {
+      console.error('Recharge order was not found or is not accessible.');
+      pollTimer.current = setTimeout(
+        () => void pollOrderStatus(id, userId),
+        POLL_INTERVAL_MS
+      );
+      return;
+    }
+
+    const orderStatus = String(order.status).toLowerCase();
+
+    if (orderStatus === 'approved' || orderStatus === 'completed') {
+      stopPolling();
+      await refreshBalance(userId);
+      setStatus('success');
+      toast.success('Payment confirmed.');
+      return;
+    }
+
+    if (
+      orderStatus === 'rejected' ||
+      orderStatus === 'failed' ||
+      orderStatus === 'cancelled' ||
+      orderStatus === 'canceled'
+    ) {
+      stopPolling();
+      setStatus('failed');
+      toast.error('Payment was not completed. You can check Recharge Status.');
+      return;
+    }
+
+    pollTimer.current = setTimeout(
+      () => void pollOrderStatus(id, userId),
+      POLL_INTERVAL_MS
+    );
+  };
+
+  const handleRecharge = async () => {
+    const rechargeAmount = Number(amount);
+    const cleanPhone = phone.trim();
+
+    if (
+      !Number.isFinite(rechargeAmount) ||
+      rechargeAmount < MIN_AMOUNT ||
+      rechargeAmount > MAX_AMOUNT
+    ) {
+      toast.error(
+        `Enter an amount between UGX ${MIN_AMOUNT.toLocaleString()} and UGX ${MAX_AMOUNT.toLocaleString()}`
+      );
+      return;
+    }
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      toast.error('Enter a valid phone number, for example 07XXXXXXXX');
       return;
     }
 
     const userId = getCurrentUserId();
+
     if (!userId) {
       navigate('/login');
       return;
     }
 
-    const rechargeAmount = Number(amount);
+    stopPolling();
+    pollAttempts.current = 0;
+
     const newOrderId = formatId();
     setOrderId(newOrderId);
     setStatus('loading');
 
     try {
-      // FIX: Do NOT insert order here - let /api/payments/create do it.
-      // Double-insert was causing duplicate / conflict.
-      // We only call the API which creates order + calls PesaJet.
+      const { error: orderError } = await supabase
+        .from('recharge_orders')
+        .insert({
+          id: newOrderId,
+          user_id: userId,
+          phone: cleanPhone,
+          phone_number: cleanPhone,
+          amount: rechargeAmount,
+          payment_method: provider,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        });
 
-      const res = await fetch('/api/payments/create', {
+      if (orderError) {
+        throw new Error(`Could not create recharge order: ${orderError.message}`);
+      }
+
+      const response = await fetch('/api/payments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: rechargeAmount,
-          phone: formatPhone256(phone), // FIX: Send 256...
-          phone_number: formatPhone256(phone),
+          phone: cleanPhone,
           provider,
           reference: newOrderId,
-          order_id: newOrderId,
-          user_id: String(userId),
-          userId: String(userId),
+          user_id: userId,
         }),
       });
 
-      const data = await res.json().catch(() => null);
-      console.log('Payment API response:', res.status, data);
+      const result = await response.json().catch(() => null);
+      console.log('Payment API response:', response.status, result);
 
-      if (!res.ok) {
+      const acceptedStatus = ['accepted', 'pending', 'initiated'].includes(
+        String(result?.status || '').toLowerCase()
+      );
+
+      if (
+        !response.ok ||
+        (result?.success !== true && !acceptedStatus)
+      ) {
         throw new Error(
-          data?.error ||
-            data?.message ||
-            `Payment API failed (${res.status}) - PIN NOT SENT! Check Vercel Logs / PESAJET_API_KEY`
+          result?.error ||
+            result?.message ||
+            `Payment request failed (${response.status})`
         );
       }
 
-      if (data?.success === false) {
-        throw new Error(
-          data?.error || data?.message || 'Payment provider rejected the request - PIN NOT SENT!'
-        );
-      }
-
-      // SUCCESS = PesaJet accepted = PIN is now on its way!
       setStatus('verifying');
-      toast.success('PIN sent! Check your phone for the prompt.');
-      startAutoCreditPolling(newOrderId, String(userId), rechargeAmount);
-    } catch (error: any) {
+      toast.success(
+        'Payment request accepted. Check your phone for the provider prompt.'
+      );
+
+      void pollOrderStatus(newOrderId, userId);
+    } catch (error) {
       console.error('Recharge request failed:', error);
+
+      // Do not display a success/prompt message if the request failed.
       setStatus('idle');
-      toast.error(error?.message || 'Could not start the mobile-money payment');
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Could not start the mobile-money payment'
+      );
     }
   };
 
-  const startAutoCreditPolling = (oid: string, uid: string, amt: number) => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    let attempts = 0;
-
-    const interval = setInterval(async () => {
-      attempts++;
-
-      if (attempts > 60) { // 60 x 3s = 3 mins
-        clearInterval(interval);
-        pollingRef.current = null;
-        toast.error('Waiting timeout - Check Recharge Status');
-        setStatus('idle');
-        return;
-      }
-
-      const { data: order, error } = await supabase
-        .from('recharge_orders')
-        .select('status')
-        .eq('id', oid)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Recharge order polling error:', error);
-        return;
-      }
-
-      // FIX: Accept approved / completed / success / paid - PesaJet uses different words!
-      const st = String(order?.status || '').toLowerCase();
-      if (st === 'approved' || st === 'completed' || st === 'success' || st === 'paid') {
-        clearInterval(interval);
-        pollingRef.current = null;
-
-        try {
-          // FIX: DO NOT add amt manually here!
-          // Backend callback already added it. Just fetch FRESH balance.
-          // Old code did balance + amt again = DOUBLE CREDIT!
-          const { data: fresh } = await supabase
-            .from('users')
-            .select('balance')
-            .eq('id', uid)
-            .maybeSingle();
-
-          let newBal = amt;
-          if (fresh) {
-            newBal = Number((fresh as any).balance || 0);
-          } else {
-            // Fallback: try by phone
-            const { data: byPhone } = await supabase
-              .from('users')
-              .select('balance')
-              .eq('phone', formatPhone07(phone))
-              .maybeSingle();
-            if (byPhone) newBal = Number((byPhone as any).balance || 0);
-          }
-
-          try {
-            const raw = localStorage.getItem('legend_user');
-            if (raw) {
-              const u = JSON.parse(raw);
-              u.balance = newBal;
-              localStorage.setItem('legend_user', JSON.stringify(u));
-              setCurrentBalance(newBal);
-            }
-          } catch {}
-
-          setStatus('success');
-          toast.success(`Success! UGX ${amt.toLocaleString()} credited!`);
-        } catch (err) {
-          console.error('Wallet sync failed:', err);
-          setStatus('idle');
-          toast.error('Recharge completed but wallet sync failed. Check balance / contact support.');
-        }
-      }
-
-      // If failed, stop polling
-      if (st === 'failed' || st === 'rejected' || st === 'cancelled') {
-        clearInterval(interval);
-        pollingRef.current = null;
-        setStatus('idle');
-        toast.error('Payment failed / cancelled. No money was removed.');
-      }
-    }, 3000);
-    pollingRef.current = interval;
+  const resetRecharge = () => {
+    stopPolling();
+    setOrderId('');
+    setStatus('idle');
   };
 
   return (
@@ -253,36 +305,22 @@ export default function RechargePage() {
             >
               📲
             </div>
-            <p className="text-white font-bold text-lg">Check Your Phone!</p>
+            <p className="text-white font-bold text-lg">
+              Check Your Phone
+            </p>
             <p className="text-[#c9a84c] font-black text-xl mt-2">
               UGX {Number(amount).toLocaleString()}
             </p>
             <p className="text-white text-sm mt-3">
-              PIN prompt sent to {phone}
+              Payment request accepted for {phone}.
             </p>
             <p className="text-yellow-400 text-xs mt-2 animate-pulse">
-              Waiting for PIN... Wallet will auto-credit after PIN!
+              Waiting for the provider to confirm payment…
             </p>
-            <div
-              className="mt-5 p-3 rounded-xl text-left"
-              style={{ background: '#1f1f1f' }}
-            >
-              <p className="text-gray-300 text-xs font-bold">
-                How to complete:
-              </p>
-              <p className="text-gray-400 text-[11px] mt-1">
-                1. You will get: "Pay UGX {amount} to LEGEND"
-              </p>
-              <p className="text-gray-400 text-[11px]">
-                2. Enter your Mobile Money PIN
-              </p>
-              <p className="text-gray-400 text-[11px]">
-                3. Money removed from {phone}
-              </p>
-              <p className="text-green-400 text-[11px] font-bold">
-                4. Wallet auto-credited instantly!
-              </p>
-            </div>
+            <p className="text-gray-500 text-xs mt-3">
+              Enter your PIN only in the official MTN/Airtel prompt. This app
+              will never ask for your PIN.
+            </p>
             <p className="text-gray-600 text-[10px] mt-4">
               Order: {orderId.slice(0, 12)} • {provider.toUpperCase()}
             </p>
@@ -302,15 +340,12 @@ export default function RechargePage() {
             >
               ✓
             </div>
-            <p className="text-white font-bold">Payment Success!</p>
+            <p className="text-white font-bold">Payment Confirmed</p>
             <p className="text-[#c9a84c] font-black text-lg mt-2">
-              UGX {Number(amount).toLocaleString()} Credited!
+              UGX {Number(amount).toLocaleString()}
             </p>
             <p className="text-gray-500 text-sm">
-              New Balance: UGX {currentBalance.toLocaleString()}
-            </p>
-            <p className="text-green-400 text-xs mt-2">
-              Money removed from {phone} ✓
+              Current balance: UGX {currentBalance.toLocaleString()}
             </p>
             <div className="grid grid-cols-2 gap-3 mt-6">
               <Link
@@ -329,11 +364,36 @@ export default function RechargePage() {
               </Link>
             </div>
             <button
-              onClick={() => setStatus('idle')}
+              onClick={resetRecharge}
               className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm"
               style={{ background: '#1f1f1f' }}
             >
               Recharge Again
+            </button>
+          </div>
+        ) : status === 'failed' || status === 'timeout' ? (
+          <div className="text-center py-8">
+            <p className="text-white font-bold text-lg">
+              {status === 'failed' ? 'Payment Not Completed' : 'Still Waiting'}
+            </p>
+            <p className="text-gray-400 text-sm mt-2">
+              {status === 'failed'
+                ? 'The provider did not confirm this payment.'
+                : 'We have not received confirmation yet. Check the order status before trying again.'}
+            </p>
+            <Link
+              to="/recharge-status"
+              className="mt-5 inline-block w-full py-3 rounded-xl font-bold text-black text-sm text-center"
+              style={{ background: '#c9a84c' }}
+            >
+              View Status
+            </Link>
+            <button
+              onClick={resetRecharge}
+              className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm"
+              style={{ background: '#1f1f1f' }}
+            >
+              Back
             </button>
           </div>
         ) : (
@@ -359,14 +419,17 @@ export default function RechargePage() {
                 <Wallet size={15} className="text-gray-500 mr-2" />
                 <input
                   type="number"
+                  min={MIN_AMOUNT}
+                  max={MAX_AMOUNT}
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="50000"
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder="30000"
                   className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600"
                 />
               </div>
               <p className="text-[11px] text-gray-600 mt-1">
-                Min UGX 1,000 • Max 1,500,000
+                Min UGX {MIN_AMOUNT.toLocaleString()} • Max UGX{' '}
+                {MAX_AMOUNT.toLocaleString()}
               </p>
             </div>
 
@@ -376,11 +439,14 @@ export default function RechargePage() {
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <button
+                  type="button"
                   onClick={() => setProvider('mtn')}
                   className="py-3.5 rounded-xl text-sm font-bold"
                   style={{
                     background:
-                      provider === 'mtn' ? 'rgba(201,168,76,0.15)' : '#1f1f1f',
+                      provider === 'mtn'
+                        ? 'rgba(201,168,76,0.15)'
+                        : '#1f1f1f',
                     border: `1.5px solid ${
                       provider === 'mtn' ? '#c9a84c' : '#333'
                     }`,
@@ -389,8 +455,8 @@ export default function RechargePage() {
                 >
                   MTN
                 </button>
-
                 <button
+                  type="button"
                   onClick={() => setProvider('airtel')}
                   className="py-3.5 rounded-xl text-sm font-bold"
                   style={{
@@ -421,31 +487,34 @@ export default function RechargePage() {
                 <input
                   type="tel"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(event) => setPhone(event.target.value)}
                   placeholder="07XXXXXXXX"
+                  autoComplete="tel"
                   className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600"
                 />
               </div>
             </div>
 
             <button
+              type="button"
               onClick={handleRecharge}
               disabled={status === 'loading'}
               className="w-full py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60"
               style={{ background: '#c9a84c' }}
             >
               {status === 'loading'
-                ? 'Sending PIN...'
-                : `Recharge UGX ${Number(amount || 0).toLocaleString()} - Get PIN`}
+                ? 'Requesting Payment…'
+                : `Recharge UGX ${Number(amount || 0).toLocaleString()}`}
             </button>
 
-            <p className="text-center text-green-500 text-[11px]">
-              ✓ Auto-credit after PIN - Money removed & wallet credited
+            <p className="text-center text-gray-500 text-[11px]">
+              Wallet credit requires confirmation from the payment provider.
             </p>
           </div>
         )}
       </div>
+
       <div className="h-8" />
     </div>
   );
-    }
+      }
