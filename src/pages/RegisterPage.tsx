@@ -1,24 +1,51 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 
 const REGISTRATION_BONUS = 9000;
 
+function makeReferralCode() {
+  return `LEGEND${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+async function createUniqueReferralCode(): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = makeReferralCode();
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('referral_code', code)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Could not create referral code: ${error.message}`);
+    }
+
+    if (!data) return code;
+  }
+
+  throw new Error('Could not generate a unique referral code. Please try again.');
+}
+
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [referral, setReferral] = useState('');
+  const [referral, setReferral] = useState(
+    () => new URLSearchParams(location.search).get('ref') || ''
+  );
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
     const cleanName = fullName.trim();
     const cleanPhone = phone.trim();
-    const cleanReferral = referral.trim();
+    const cleanReferral = referral.trim().toUpperCase();
 
     if (!cleanName || !cleanPhone || !password) {
       toast.error('Fill all required fields');
@@ -37,6 +64,11 @@ export default function RegisterPage() {
 
     if (password !== confirmPassword) {
       toast.error('Passwords do not match');
+      return;
+    }
+
+    if (!cleanReferral || cleanReferral === 'NULL') {
+      toast.error('A valid referral code is required');
       return;
     }
 
@@ -59,9 +91,26 @@ export default function RegisterPage() {
         return;
       }
 
+      const { data: referrer, error: referralError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('referral_code', cleanReferral)
+        .maybeSingle();
+
+      if (referralError) {
+        throw new Error(`Could not verify referral code: ${referralError.message}`);
+      }
+
+      if (!referrer) {
+        toast.error('Referral code not found. Check the code and try again.');
+        return;
+      }
+
       const newId = `user_${Date.now()}_${Math.random()
         .toString(36)
         .slice(2, 8)}`;
+
+      const newReferralCode = await createUniqueReferralCode();
 
       const { data, error } = await supabase
         .from('users')
@@ -71,7 +120,8 @@ export default function RegisterPage() {
           name: cleanName,
           phone: cleanPhone,
           password,
-          referral_code: cleanReferral || null,
+          referral_code: newReferralCode,
+          referred_by: cleanReferral,
           balance: REGISTRATION_BONUS,
           total_earnings: 0,
           created_at: new Date().toISOString(),
@@ -87,8 +137,6 @@ export default function RegisterPage() {
         throw new Error('Registration failed: Supabase returned no user record');
       }
 
-      console.log('Balance returned by Supabase:', data.balance);
-
       if (Number(data.balance) !== REGISTRATION_BONUS) {
         throw new Error(
           `Expected balance ${REGISTRATION_BONUS}, but Supabase returned ${data.balance}`
@@ -98,11 +146,11 @@ export default function RegisterPage() {
       const userObj = {
         id: data.id,
         phone: data.phone,
-        password,
         name: data.full_name || data.name || cleanName,
-        balance: Number(data.balance ?? REGISTRATION_BONUS),
+        balance: Number(data.balance),
         level: data.level ?? 1,
-        referralCode: data.referral_code ?? '',
+        referralCode: data.referral_code,
+        referredBy: data.referred_by,
         cumulativeIncome: Number(data.total_earnings ?? 0),
       };
 
@@ -113,9 +161,11 @@ export default function RegisterPage() {
 
       toast.success('Account created! UGX 9,000 bonus credited.');
       navigate('/home');
-    } catch (error: any) {
+    } catch (error) {
       console.error('Registration failed:', error);
-      toast.error(error?.message || 'Registration failed');
+      toast.error(
+        error instanceof Error ? error.message : 'Registration failed'
+      );
     } finally {
       setLoading(false);
     }
@@ -206,12 +256,13 @@ export default function RegisterPage() {
 
           <div>
             <label className="text-xs text-gray-500 mb-1.5 block">
-              Referral Code (Optional)
+              Referral Code *
             </label>
             <input
               value={referral}
               onChange={(event) => setReferral(event.target.value)}
-              placeholder="Optional"
+              placeholder="Enter referral code"
+              autoComplete="off"
               className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
               style={{ background: '#1f1f1f', border: '1px solid #333' }}
             />
