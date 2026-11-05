@@ -3,12 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 function normalizeUgandaPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
 
-  // Convert local Ugandan format (07XXXXXXXX or 03XXXXXXXX) to country code.
   if (digits.startsWith('0') && digits.length === 10) {
     return `256${digits.slice(1)}`;
   }
 
-  // Accept country-code format with or without a leading plus.
   if (digits.startsWith('256') && digits.length === 12) {
     return digits;
   }
@@ -36,20 +34,20 @@ async function readJson(response) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
   }
 
-  const {
-    amount,
-    phone,
-    provider,
-    reference,
-    user_id,
-  } = req.body || {};
-
+  const { amount, phone, provider, reference, user_id } = req.body || {};
   const paymentAmount = Number(amount);
 
-  if (!Number.isFinite(paymentAmount) || paymentAmount < 30000 || paymentAmount > 1500000) {
+  if (
+    !Number.isFinite(paymentAmount) ||
+    paymentAmount < 30000 ||
+    paymentAmount > 1500000
+  ) {
     return res.status(400).json({
       success: false,
       error: 'Amount must be between UGX 30,000 and UGX 1,500,000.',
@@ -64,16 +62,16 @@ export default async function handler(req, res) {
   }
 
   const apiKey = process.env.PESAJET_API_KEY;
-  const merchantId = process.env.PESAJET_MERCHANT_ID;
   const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
-  const appBaseUrl = process.env.APP_BASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const appBaseUrl =
+    process.env.APP_BASE_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
 
-  if (!apiKey || !merchantId) {
+  if (!apiKey) {
     return res.status(500).json({
       success: false,
-      error: 'PesaJet credentials are not configured on the server.',
+      error: 'PesaJet API key is not configured on the server.',
     });
   }
 
@@ -87,7 +85,7 @@ export default async function handler(req, res) {
   if (!appBaseUrl) {
     return res.status(500).json({
       success: false,
-      error: 'APP_BASE_URL is not configured on the server.',
+      error: 'Set APP_BASE_URL to your deployed site URL.',
     });
   }
 
@@ -100,19 +98,52 @@ export default async function handler(req, res) {
   } catch (error) {
     return res.status(400).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Invalid payment details.',
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Invalid payment details.',
     });
   }
 
-  const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet/webhook`;
+  const supabase = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false },
+  });
+
+  // This matches the webhook file previously discussed:
+  // api/pesajet-callback.js -> /api/pesajet-callback
+  const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet-callback`;
+
+  // These endpoint, authentication, and request-field assumptions come from
+  // your existing code. Confirm them against PesaJet's current API docs.
+  const paymentsUrl = 'https://api.pesajet.com/api/v1/payments';
 
   try {
-    const pesajetResponse = await fetch('https://api.pesajet.com/api/v1/payments', {
+    // Record the order before calling PesaJet, so a fast callback can find it.
+    const { error: insertError } = await supabase
+      .from('pesajet_transactions')
+      .insert({
+        order_id: String(reference),
+        user_id: String(user_id),
+        amount: paymentAmount,
+        phone: normalizedPhone,
+        network,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      });
+
+    if (insertError) {
+      console.error('Could not create PesaJet transaction record:', insertError.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Could not create the payment record.',
+      });
+    }
+
+    const providerResponse = await fetch(paymentsUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        'X-Merchant-ID': merchantId,
       },
       body: JSON.stringify({
         amount: paymentAmount,
@@ -124,11 +155,16 @@ export default async function handler(req, res) {
       }),
     });
 
-    const providerData = await readJson(pesajetResponse);
+    const providerData = await readJson(providerResponse);
 
-    if (!pesajetResponse.ok) {
-      console.error('PesaJet payment request failed:', {
-        status: pesajetResponse.status,
+    if (!providerResponse.ok) {
+      await supabase
+        .from('pesajet_transactions')
+        .update({ status: 'failed' })
+        .eq('order_id', String(reference));
+
+      console.error('PesaJet rejected payment request:', {
+        status: providerResponse.status,
         response: providerData,
       });
 
@@ -137,7 +173,7 @@ export default async function handler(req, res) {
         error:
           providerData?.message ||
           providerData?.error ||
-          `PesaJet rejected the request (${pesajetResponse.status}).`,
+          `PesaJet rejected the request (${providerResponse.status}).`,
       });
     }
 
@@ -148,7 +184,7 @@ export default async function handler(req, res) {
       providerData?.data?.transaction_id;
 
     if (!transactionId) {
-      console.error('PesaJet response did not include a transaction ID:', providerData);
+      console.error('PesaJet response had no transaction ID:', providerData);
 
       return res.status(502).json({
         success: false,
@@ -156,42 +192,38 @@ export default async function handler(req, res) {
       });
     }
 
-    const supabase = createClient(supabaseUrl, serviceKey);
-
-    const { error: saveError } = await supabase
+    const { error: updateError } = await supabase
       .from('pesajet_transactions')
-      .insert({
-        order_id: String(reference),
-        user_id: String(user_id),
-        amount: paymentAmount,
-        phone: normalizedPhone,
-        network,
-        pesajet_id: String(transactionId),
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      });
+      .update({ pesajet_id: String(transactionId) })
+      .eq('order_id', String(reference));
 
-    if (saveError) {
-      // Log this for reconciliation. The provider may already have accepted
-      // the request, so do not encourage an immediate duplicate payment retry.
-      console.error('Could not save PesaJet transaction:', saveError);
+    if (updateError) {
+      // PesaJet may already have accepted the request. Log for reconciliation;
+      // do not claim that the request failed and encourage a duplicate retry.
+      console.error('Could not save PesaJet transaction ID:', updateError.message);
     }
 
     return res.status(200).json({
       success: true,
       status: 'accepted',
+      reference: String(reference),
       transaction_id: String(transactionId),
-      message: 'Payment request accepted by the provider.',
+      message: 'PesaJet accepted the payment request.',
     });
   } catch (error) {
-    console.error('PesaJet payment handler error:', error);
+    console.error(
+      'PesaJet payment handler error:',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+
+    await supabase
+      .from('pesajet_transactions')
+      .update({ status: 'failed' })
+      .eq('order_id', String(reference));
 
     return res.status(502).json({
       success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Could not contact the payment provider.',
+      error: 'Could not contact the payment provider.',
     });
   }
-}
+          }
