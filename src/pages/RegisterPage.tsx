@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 
 const REGISTRATION_BONUS = 9000;
 
-function makeReferralCode() {
+function makeReferralCode(): string {
   return `LEGEND${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
 
@@ -23,7 +23,9 @@ async function createUniqueReferralCode(): Promise<string> {
       throw new Error(`Could not create referral code: ${error.message}`);
     }
 
-    if (!data) return code;
+    if (!data) {
+      return code;
+    }
   }
 
   throw new Error('Could not generate a unique referral code. Please try again.');
@@ -37,15 +39,20 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [referral, setReferral] = useState(
-    () => new URLSearchParams(location.search).get('ref') || ''
-  );
+  const [referral, setReferral] = useState(() => {
+    const code = new URLSearchParams(location.search).get('ref')?.trim() || '';
+    return code.toLowerCase() === 'null' ? '' : code;
+  });
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
     const cleanName = fullName.trim();
     const cleanPhone = phone.trim();
-    const cleanReferral = referral.trim().toUpperCase();
+    const enteredReferral = referral.trim();
+    const cleanReferral =
+      enteredReferral.toLowerCase() === 'null'
+        ? ''
+        : enteredReferral.toUpperCase();
 
     if (!cleanName || !cleanPhone || !password) {
       toast.error('Fill all required fields');
@@ -64,11 +71,6 @@ export default function RegisterPage() {
 
     if (password !== confirmPassword) {
       toast.error('Passwords do not match');
-      return;
-    }
-
-    if (!cleanReferral || cleanReferral === 'NULL') {
-      toast.error('A valid referral code is required');
       return;
     }
 
@@ -91,19 +93,28 @@ export default function RegisterPage() {
         return;
       }
 
-      const { data: referrer, error: referralError } = await supabase
-        .from('users')
-        .select('id')
-        .eq('referral_code', cleanReferral)
-        .maybeSingle();
+      let referrerId: string | null = null;
 
-      if (referralError) {
-        throw new Error(`Could not verify referral code: ${referralError.message}`);
-      }
+      // Referral is optional. If supplied, it must match an existing user's code.
+      if (cleanReferral) {
+        const { data: referrer, error: referralError } = await supabase
+          .from('users')
+          .select('id')
+          .eq('referral_code', cleanReferral)
+          .maybeSingle();
 
-      if (!referrer) {
-        toast.error('Referral code not found. Check the code and try again.');
-        return;
+        if (referralError) {
+          throw new Error(
+            `Could not verify referral code: ${referralError.message}`
+          );
+        }
+
+        if (!referrer) {
+          toast.error('Referral code not found. Check it or leave it blank.');
+          return;
+        }
+
+        referrerId = String(referrer.id);
       }
 
       const newId = `user_${Date.now()}_${Math.random()
@@ -121,7 +132,7 @@ export default function RegisterPage() {
           phone: cleanPhone,
           password,
           referral_code: newReferralCode,
-          referred_by: cleanReferral,
+          referred_by: referrerId,
           balance: REGISTRATION_BONUS,
           total_earnings: 0,
           created_at: new Date().toISOString(),
@@ -256,12 +267,12 @@ export default function RegisterPage() {
 
           <div>
             <label className="text-xs text-gray-500 mb-1.5 block">
-              Referral Code *
+              Referral Code (Optional)
             </label>
             <input
               value={referral}
               onChange={(event) => setReferral(event.target.value)}
-              placeholder="Enter referral code"
+              placeholder="Enter referral code, if you have one"
               autoComplete="off"
               className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
               style={{ background: '#1f1f1f', border: '1px solid #333' }}
@@ -288,4 +299,4 @@ export default function RegisterPage() {
       </div>
     </div>
   );
-  }
+}
