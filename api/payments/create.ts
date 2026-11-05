@@ -1,59 +1,197 @@
-// api/payments/create.ts - PesaJet Payment Create - Saves to Recharge table
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+function normalizeUgandaPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
 
-export default async function handler(req: any, res: any) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if(req.method === 'OPTIONS') return res.status(200).end();
+  // Convert local Ugandan format (07XXXXXXXX or 03XXXXXXXX) to country code.
+  if (digits.startsWith('0') && digits.length === 10) {
+    return `256${digits.slice(1)}`;
+  }
+
+  // Accept country-code format with or without a leading plus.
+  if (digits.startsWith('256') && digits.length === 12) {
+    return digits;
+  }
+
+  throw new Error('Enter a valid Uganda phone number.');
+}
+
+function getNetwork(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+
+  if (normalized === 'mtn') return 'MTN';
+  if (normalized === 'airtel') return 'AIRTEL';
+
+  throw new Error('Choose MTN or Airtel.');
+}
+
+async function readJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  const {
+    amount,
+    phone,
+    provider,
+    reference,
+    user_id,
+  } = req.body || {};
+
+  const paymentAmount = Number(amount);
+
+  if (!Number.isFinite(paymentAmount) || paymentAmount < 30000 || paymentAmount > 1500000) {
+    return res.status(400).json({
+      success: false,
+      error: 'Amount must be between UGX 30,000 and UGX 1,500,000.',
+    });
+  }
+
+  if (!reference || !user_id) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing payment reference or user ID.',
+    });
+  }
+
+  const apiKey = process.env.PESAJET_API_KEY;
+  const merchantId = process.env.PESAJET_MERCHANT_ID;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  const appBaseUrl = process.env.APP_BASE_URL;
+
+  if (!apiKey || !merchantId) {
+    return res.status(500).json({
+      success: false,
+      error: 'PesaJet credentials are not configured on the server.',
+    });
+  }
+
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({
+      success: false,
+      error: 'Supabase server credentials are not configured.',
+    });
+  }
+
+  if (!appBaseUrl) {
+    return res.status(500).json({
+      success: false,
+      error: 'APP_BASE_URL is not configured on the server.',
+    });
+  }
+
+  let normalizedPhone;
+  let network;
 
   try {
-    const { userId, amount, phone, phoneNumber, method, paymentMethod } = req.body;
-    const finalPhone = phone || phoneNumber || '';
-    const finalMethod = method || paymentMethod || 'MTN';
-    const finalUserId = userId || req.body.user_id || 'unknown';
-    const finalAmount = amount || req.body.amount;
+    normalizedPhone = normalizeUgandaPhone(phone);
+    network = getNetwork(provider);
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Invalid payment details.',
+    });
+  }
 
-    if(!finalAmount) return res.status(400).json({ success: false, error: 'Amount required' });
+  const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet/webhook`;
 
-    const orderId = `pesajet-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
-
-    console.log('Creating payment:', { orderId, finalUserId, finalAmount, finalPhone });
-
-    // SAVE TO SUPABASE - THIS IS WHAT ADMIN PESAJET READS!
-    const { data, error } = await supabase.from('investment_packages').insert({
-      id: orderId,
-      user_id: finalUserId,
-      amount: Number(finalAmount),
-      product_name: 'RECHARGE',
-      status: 'pending',
-      payment_method: finalMethod,
-      phone_number: finalPhone,
-      submitted_at: new Date().toISOString()
-    }).select();
-
-    if(error){
-      console.error('Supabase error:', error);
-      return res.status(500).json({ success: false, error: error.message, hint: 'Run SQL to create investment_packages table' });
-    }
-
-    console.log('✅ Saved to investment_packages:', orderId);
-
-    // Return success - Admin will manually confirm after checking MTN 0756406186
-    return res.status(200).json({
-      success: true,
-      orderId,
-      id: orderId,
-      message: 'Payment pending - Admin will confirm',
-      data
+  try {
+    const pesajetResponse = await fetch('https://api.pesajet.com/api/v1/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        'X-Merchant-ID': merchantId,
+      },
+      body: JSON.stringify({
+        amount: paymentAmount,
+        phone: normalizedPhone,
+        network,
+        reference: String(reference),
+        callback_url: callbackUrl,
+        description: `Legend Recharge UGX ${paymentAmount}`,
+      }),
     });
 
-  } catch(e:any){
-    console.error('create.ts error:', e);
-    return res.status(500).json({ success: false, error: e.message });
+    const providerData = await readJson(pesajetResponse);
+
+    if (!pesajetResponse.ok) {
+      console.error('PesaJet payment request failed:', {
+        status: pesajetResponse.status,
+        response: providerData,
+      });
+
+      return res.status(502).json({
+        success: false,
+        error:
+          providerData?.message ||
+          providerData?.error ||
+          `PesaJet rejected the request (${pesajetResponse.status}).`,
+      });
+    }
+
+    const transactionId =
+      providerData?.id ||
+      providerData?.transaction_id ||
+      providerData?.data?.id ||
+      providerData?.data?.transaction_id;
+
+    if (!transactionId) {
+      console.error('PesaJet response did not include a transaction ID:', providerData);
+
+      return res.status(502).json({
+        success: false,
+        error: 'PesaJet response did not include a transaction ID.',
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, serviceKey);
+
+    const { error: saveError } = await supabase
+      .from('pesajet_transactions')
+      .insert({
+        order_id: String(reference),
+        user_id: String(user_id),
+        amount: paymentAmount,
+        phone: normalizedPhone,
+        network,
+        pesajet_id: String(transactionId),
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      });
+
+    if (saveError) {
+      // Log this for reconciliation. The provider may already have accepted
+      // the request, so do not encourage an immediate duplicate payment retry.
+      console.error('Could not save PesaJet transaction:', saveError);
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: 'accepted',
+      transaction_id: String(transactionId),
+      message: 'Payment request accepted by the provider.',
+    });
+  } catch (error) {
+    console.error('PesaJet payment handler error:', error);
+
+    return res.status(502).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Could not contact the payment provider.',
+    });
   }
 }
