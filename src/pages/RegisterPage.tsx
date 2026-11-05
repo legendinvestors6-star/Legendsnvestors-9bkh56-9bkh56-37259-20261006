@@ -87,6 +87,14 @@ export default function RegisterPage() {
         throw new Error('Registration failed: Supabase returned no user record');
       }
 
+      console.log('Balance returned by Supabase:', data.balance);
+
+      if (Number(data.balance) !== REGISTRATION_BONUS) {
+        throw new Error(
+          `Expected balance ${REGISTRATION_BONUS}, but Supabase returned ${data.balance}`
+        );
+      }
+
       const userObj = {
         id: data.id,
         phone: data.phone,
@@ -229,4 +237,4 @@ export default function RegisterPage() {
       </div>
     </div>
   );
-}
+  }
