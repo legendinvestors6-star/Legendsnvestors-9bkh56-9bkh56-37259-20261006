@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { Phone, Wallet } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -20,6 +20,20 @@ function getCurrentUserId(): string | null {
   }
 }
 
+// FIX: 077... -> 25677... for PesaJet / MTN / Airtel
+function formatPhone256(p: string): string {
+  let s = String(p || '').trim().replace(/\s+/g, '');
+  if (s.startsWith('+')) s = s.slice(1);
+  if (s.startsWith('0')) s = '256' + s.slice(1);
+  return s;
+}
+function formatPhone07(p: string): string {
+  let s = String(p || '').trim().replace(/\s+/g, '');
+  if (s.startsWith('+256')) return '0' + s.slice(4);
+  if (s.startsWith('256')) return '0' + s.slice(3);
+  return s;
+}
+
 export default function RechargePage() {
   const navigate = useNavigate();
   const [amount, setAmount] = useState('30000');
@@ -29,21 +43,38 @@ export default function RechargePage() {
     useState<'idle' | 'loading' | 'verifying' | 'success'>('idle');
   const [currentBalance, setCurrentBalance] = useState(0);
   const [orderId, setOrderId] = useState('');
+  const pollingRef = useRef<any>(null);
 
+  // FIX: Load REAL balance from Supabase, not stale localStorage 9000
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('legend_user');
-      if (raw) {
+    const load = async () => {
+      try {
+        const raw = localStorage.getItem('legend_user');
+        if (!raw) return;
         const u = JSON.parse(raw);
-        setCurrentBalance(Number(u.balance || 9000));
         if (u.phone) setPhone(u.phone);
-      }
-    } catch {}
+        // Try Supabase first
+        const { data } = await supabase.from('users').select('balance').eq('id', u.id).maybeSingle();
+        if (data) {
+          setCurrentBalance(Number((data as any).balance || 0));
+          u.balance = Number((data as any).balance || 0);
+          localStorage.setItem('legend_user', JSON.stringify(u));
+        } else {
+          setCurrentBalance(Number(u.balance || 0));
+        }
+      } catch {}
+    };
+    load();
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, []);
 
   const handleRecharge = async () => {
     if (!amount || Number(amount) < 1000) {
       toast.error('Enter valid amount');
+      return;
+    }
+    if (Number(amount) < 1000 || Number(amount) > 1500000) {
+      toast.error('Min UGX 1,000 • Max 1,500,000');
       return;
     }
 
@@ -64,30 +95,22 @@ export default function RechargePage() {
     setStatus('loading');
 
     try {
-      const { error: orderError } = await supabase.from('recharge_orders').insert({
-        id: newOrderId,
-        user_id: String(userId),
-        phone: phone,
-        amount: rechargeAmount,
-        payment_method: provider,
-        phone_number: phone,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      });
-
-      if (orderError) {
-        throw new Error(`Could not create recharge order: ${orderError.message}`);
-      }
+      // FIX: Do NOT insert order here - let /api/payments/create do it.
+      // Double-insert was causing duplicate / conflict.
+      // We only call the API which creates order + calls PesaJet.
 
       const res = await fetch('/api/payments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: rechargeAmount,
-          phone,
+          phone: formatPhone256(phone), // FIX: Send 256...
+          phone_number: formatPhone256(phone),
           provider,
           reference: newOrderId,
+          order_id: newOrderId,
           user_id: String(userId),
+          userId: String(userId),
         }),
       });
 
@@ -98,18 +121,19 @@ export default function RechargePage() {
         throw new Error(
           data?.error ||
             data?.message ||
-            `Payment API failed (${res.status})`
+            `Payment API failed (${res.status}) - PIN NOT SENT! Check Vercel Logs / PESAJET_API_KEY`
         );
       }
 
       if (data?.success === false) {
         throw new Error(
-          data?.error || data?.message || 'Payment provider rejected the request'
+          data?.error || data?.message || 'Payment provider rejected the request - PIN NOT SENT!'
         );
       }
 
+      // SUCCESS = PesaJet accepted = PIN is now on its way!
       setStatus('verifying');
-      toast.success('Payment request accepted. Check your phone for the prompt.');
+      toast.success('PIN sent! Check your phone for the prompt.');
       startAutoCreditPolling(newOrderId, String(userId), rechargeAmount);
     } catch (error: any) {
       console.error('Recharge request failed:', error);
@@ -119,13 +143,15 @@ export default function RechargePage() {
   };
 
   const startAutoCreditPolling = (oid: string, uid: string, amt: number) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     let attempts = 0;
 
     const interval = setInterval(async () => {
       attempts++;
 
-      if (attempts > 40) {
+      if (attempts > 60) { // 60 x 3s = 3 mins
         clearInterval(interval);
+        pollingRef.current = null;
         toast.error('Waiting timeout - Check Recharge Status');
         setStatus('idle');
         return;
@@ -135,84 +161,70 @@ export default function RechargePage() {
         .from('recharge_orders')
         .select('status')
         .eq('id', oid)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error('Recharge order polling error:', error);
         return;
       }
 
-      if (order?.status === 'approved') {
+      // FIX: Accept approved / completed / success / paid - PesaJet uses different words!
+      const st = String(order?.status || '').toLowerCase();
+      if (st === 'approved' || st === 'completed' || st === 'success' || st === 'paid') {
         clearInterval(interval);
+        pollingRef.current = null;
 
         try {
-          const { data: userData } = await supabase
+          // FIX: DO NOT add amt manually here!
+          // Backend callback already added it. Just fetch FRESH balance.
+          // Old code did balance + amt again = DOUBLE CREDIT!
+          const { data: fresh } = await supabase
             .from('users')
-            .select('id,balance')
+            .select('balance')
             .eq('id', uid)
             .maybeSingle();
 
           let newBal = amt;
-
-          if (userData) {
-            newBal = Number(userData.balance || 0) + amt;
-            const { error: updateError } = await supabase
-              .from('users')
-              .update({ balance: newBal })
-              .eq('id', uid);
-
-            if (updateError) {
-              throw new Error(`Could not update wallet: ${updateError.message}`);
-            }
+          if (fresh) {
+            newBal = Number((fresh as any).balance || 0);
           } else {
+            // Fallback: try by phone
             const { data: byPhone } = await supabase
               .from('users')
-              .select('id,balance')
-              .eq('phone', phone)
+              .select('balance')
+              .eq('phone', formatPhone07(phone))
               .maybeSingle();
-
-            if (byPhone) {
-              newBal = Number(byPhone.balance || 0) + amt;
-              const { error: updateError } = await supabase
-                .from('users')
-                .update({ balance: newBal })
-                .eq('id', byPhone.id);
-
-              if (updateError) {
-                throw new Error(`Could not update wallet by phone: ${updateError.message}`);
-              }
-            }
+            if (byPhone) newBal = Number((byPhone as any).balance || 0);
           }
 
           try {
             const raw = localStorage.getItem('legend_user');
             if (raw) {
               const u = JSON.parse(raw);
-              const { data: fresh } = await supabase
-                .from('users')
-                .select('balance')
-                .eq('id', uid)
-                .maybeSingle();
-
-              u.balance = fresh ? Number(fresh.balance) : newBal;
+              u.balance = newBal;
               localStorage.setItem('legend_user', JSON.stringify(u));
-              setCurrentBalance(u.balance);
+              setCurrentBalance(newBal);
             }
-          } catch (localError) {
-            console.error('Could not sync local wallet:', localError);
-          }
+          } catch {}
 
           setStatus('success');
-          toast.success(
-            `Success! UGX ${amt.toLocaleString()} credited - Money removed from ${phone}`
-          );
+          toast.success(`Success! UGX ${amt.toLocaleString()} credited!`);
         } catch (err) {
-          console.error('Wallet credit failed:', err);
+          console.error('Wallet sync failed:', err);
           setStatus('idle');
-          toast.error('Recharge completed but wallet credit failed. Please contact support.');
+          toast.error('Recharge completed but wallet sync failed. Check balance / contact support.');
         }
       }
+
+      // If failed, stop polling
+      if (st === 'failed' || st === 'rejected' || st === 'cancelled') {
+        clearInterval(interval);
+        pollingRef.current = null;
+        setStatus('idle');
+        toast.error('Payment failed / cancelled. No money was removed.');
+      }
     }, 3000);
+    pollingRef.current = interval;
   };
 
   return (
@@ -354,7 +366,7 @@ export default function RechargePage() {
                 />
               </div>
               <p className="text-[11px] text-gray-600 mt-1">
-                Min UGX 30000 • Max 1,500,000
+                Min UGX 1,000 • Max 1,500,000
               </p>
             </div>
 
@@ -436,5 +448,4 @@ export default function RechargePage() {
       <div className="h-8" />
     </div>
   );
-} 
- 
+    }
