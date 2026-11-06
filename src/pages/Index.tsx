@@ -6,7 +6,7 @@ export default function Index() {
   
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('adidas_user') || localStorage.getItem('user') || localStorage.getItem('currentUser');
+      const stored = localStorage.getItem('legend_user') || localStorage.getItem('user') || localStorage.getItem('currentUser');
       const user = stored ? JSON.parse(stored) : null;
       if (user) {
         navigate(user.isAdmin ? '/admin' : '/home');
