@@ -70,8 +70,8 @@ export default function RechargePage() {
     stopPolling(); pollAttempts.current = 0;
     const newOrderId = formatId(); setOrderId(newOrderId); setStatus('loading');
     try {
-      // FIXED: Call /api/pesajet - NOT /api/pesajet/create-payment (404!)
-      const response = await fetch('/api/pesajet', {
+      // CORRECT: backend is at api/pesajet/create-payment.js
+      const response = await fetch('/api/pesajet/create-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: rechargeAmount, phone: cleanPhone, provider, reference: newOrderId, user_id: userId }),
@@ -122,4 +122,4 @@ export default function RechargePage() {
       </div><div className="h-8" />
     </div>
   );
-}
+    }
