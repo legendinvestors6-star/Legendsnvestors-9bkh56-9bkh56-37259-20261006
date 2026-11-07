@@ -2,127 +2,285 @@ import { createClient } from '@supabase/supabase-js';
 
 function normalizeUgandaPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
-  let normalized = '';
-  if (digits.startsWith('0') && digits.length === 10) normalized = `256${digits.slice(1)}`;
-  else if (digits.startsWith('256') && digits.length === 12) normalized = digits;
-  else throw new Error('Enter a valid Uganda phone number.');
-  return `+${normalized}`;
+
+  if (digits.startsWith('0') && digits.length === 10) {
+    return `+256${digits.slice(1)}`;
+  }
+
+  if (digits.startsWith('256') && digits.length === 12) {
+    return `+${digits}`;
+  }
+
+  throw new Error('Enter a valid Uganda phone number.');
 }
 
-function getProvider(provider) {
-  const n = String(provider || '').trim().toLowerCase();
-  if (n === 'mtn') return 'mtn';
-  if (n === 'airtel') return 'airtel';
+function getProvider(value) {
+  const provider = String(value || '').trim().toLowerCase();
+
+  if (provider === 'mtn' || provider === 'airtel') {
+    return provider;
+  }
+
   throw new Error('Choose MTN or Airtel.');
 }
 
+function readBearerToken(req) {
+  const header = req.headers.authorization || '';
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match?.[1] || null;
+}
+
 async function readJson(response) {
-  try { return await response.json(); } catch { return null; }
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function getTransactionId(data) {
+  const id =
+    data?.id ||
+    data?.transaction_id ||
+    data?.data?.id ||
+    data?.data?.transaction_id;
+
+  return id ? String(id) : null;
 }
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed',
+    });
   }
 
-  const { amount, phone, provider, reference, user_id } = req.body || {};
+  const {
+    amount,
+    phone,
+    provider,
+    reference,
+    user_id: requestedUserId,
+  } = req.body || {};
+
   const paymentAmount = Number(amount);
 
-  if (!Number.isFinite(paymentAmount) || paymentAmount < 30000 || paymentAmount > 1500000) {
-    return res.status(400).json({ success: false, error: 'Amount must be between UGX 30,000 and UGX 1,500,000.' });
+  if (
+    !Number.isSafeInteger(paymentAmount) ||
+    paymentAmount < 30000 ||
+    paymentAmount > 1500000
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: 'Amount must be between UGX 30,000 and UGX 1,500,000.',
+    });
   }
-  if (!reference || !user_id) {
-    return res.status(400).json({ success: false, error: 'Missing payment reference or user ID.' });
+
+  if (
+    typeof reference !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,100}$/.test(reference) ||
+    !requestedUserId
+  ) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing or invalid payment reference or user ID.',
+    });
   }
 
   const apiKey = process.env.PESAJET_API_KEY;
   const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.SUPABASE_ANON_KEY;
 
-  if (!apiKey) return res.status(500).json({ success: false, error: 'PesaJet API key is not configured on the server.' });
-  if (!supabaseUrl || !serviceKey) return res.status(500).json({ success: false, error: 'Supabase server credentials are not configured.' });
+  if (!apiKey) {
+    return res.status(500).json({
+      success: false,
+      error: 'PesaJet API key is not configured on the server.',
+    });
+  }
 
-  let phoneNumber, providerValue;
+  if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+    return res.status(500).json({
+      success: false,
+      error: 'Supabase server credentials are not configured.',
+    });
+  }
+
+  // Verify the caller through Supabase Auth; do not trust a user ID supplied
+  // only in the request body.
+  const accessToken = readBearerToken(req);
+
+  if (!accessToken) {
+    return res.status(401).json({
+      success: false,
+      error: 'Sign in with Supabase Auth before starting a recharge.',
+    });
+  }
+
+  const authClient = createClient(supabaseUrl, anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  const {
+    data: { user: authenticatedUser },
+    error: authError,
+  } = await authClient.auth.getUser(accessToken);
+
+  if (authError || !authenticatedUser) {
+    return res.status(401).json({
+      success: false,
+      error: 'Your login session is invalid or expired.',
+    });
+  }
+
+  if (authenticatedUser.id !== String(requestedUserId)) {
+    return res.status(403).json({
+      success: false,
+      error: 'You cannot create a recharge for another user.',
+    });
+  }
+
+  let phoneNumber;
+  let providerValue;
+
   try {
     phoneNumber = normalizeUgandaPhone(phone);
     providerValue = getProvider(provider);
   } catch (error) {
-    return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Invalid payment details.' });
+    return res.status(400).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : 'Invalid payment details.',
+    });
   }
 
-  const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-  const paymentsUrl = 'https://payments.pesajet.com/api/v1/payments';
+  const db = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+  // Use the same table and reference used by the webhook and admin page.
+  // An existing ID is not retried automatically: this avoids duplicate
+  // payment prompts if the first provider request had an uncertain result.
+  const { error: insertError } = await db
+    .from('investment_packages')
+    .insert({
+      id: reference,
+      user_id: authenticatedUser.id,
+      amount: paymentAmount,
+      product_name: 'RECHARGE',
+      status: 'pending',
+      payment_method: providerValue,
+      phone_number: phoneNumber,
+      submitted_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+
+  if (insertError) {
+    console.error('Could not create recharge order:', insertError.message);
+
+    return res.status(409).json({
+      success: false,
+      error: 'Could not create this recharge order. Refresh and try again.',
+    });
+  }
 
   try {
-    const { error: insertError } = await supabase.from('pesajet_transactions').insert({
-      order_id: String(reference),
-      user_id: String(user_id),
-      amount: paymentAmount,
-      phone: phoneNumber,
-      network: providerValue.toUpperCase(),
-      status: 'pending',
-      created_at: new Date().toISOString(),
-    });
-    if (insertError) {
-      console.error('pesajet_transactions insert:', insertError.message);
-      return res.status(500).json({ success: false, error: 'Could not create the payment record: ' + insertError.message });
-    }
-
-    await supabase.from('recharge_orders').insert({
-      id: String(reference),
-      user_id: String(user_id),
-      phone: phoneNumber,
-      phone_number: phoneNumber,
-      amount: paymentAmount,
-      payment_method: providerValue,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-    });
-
-    // EXACT format from PesaJet docs
-    const providerResponse = await fetch(paymentsUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify({
-        amount: paymentAmount,
-        currency: 'UGX',
-        provider: providerValue,
-        phoneNumber: phoneNumber,
-      }),
-    });
+    const providerResponse = await fetch(
+      'https://payments.pesajet.com/api/v1/payments',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey,
+        },
+        body: JSON.stringify({
+          amount: paymentAmount,
+          currency: 'UGX',
+          provider: providerValue,
+          phoneNumber,
+          reference,
+        }),
+      }
+    );
 
     const providerData = await readJson(providerResponse);
 
     if (!providerResponse.ok) {
-      await supabase.from('pesajet_transactions').update({ status: 'failed' }).eq('order_id', String(reference));
-      await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
-      console.error('PesaJet rejected:', { status: providerResponse.status, response: providerData });
-      return res.status(502).json({ success: false, error: providerData?.message || providerData?.error || `PesaJet rejected the request (${providerResponse.status}).` });
+      // Only mark failed when PesaJet returned an explicit non-success HTTP
+      // response. A network timeout is ambiguous, so leave the order pending.
+      await db
+        .from('investment_packages')
+        .update({ status: 'failed' })
+        .eq('id', reference)
+        .eq('status', 'pending');
+
+      console.error('PesaJet rejected payment request:', {
+        status: providerResponse.status,
+        message: providerData?.message || providerData?.error || 'No details',
+      });
+
+      return res.status(502).json({
+        success: false,
+        error:
+          providerData?.message ||
+          providerData?.error ||
+          `PesaJet rejected the request (${providerResponse.status}).`,
+      });
     }
 
-    const transactionId =
-      providerData?.id ||
-      providerData?.transaction_id ||
-      providerData?.data?.id ||
-      providerData?.data?.transaction_id ||
-      providerData?.data?.reference ||
-      providerData?.reference ||
-      String(reference);
+    const transactionId = getTransactionId(providerData);
 
-    await supabase.from('pesajet_transactions').update({ pesajet_id: String(transactionId) }).eq('order_id', String(reference));
+    if (!transactionId) {
+      // PesaJet may have accepted the request despite an unexpected response.
+      // Keep the order pending for callback/reconciliation; do not invite a
+      // duplicate payment attempt.
+      console.error('PesaJet response had no transaction ID.');
+
+      return res.status(502).json({
+        success: false,
+        reference,
+        error:
+          'The provider response could not be confirmed. Check order status before retrying.',
+      });
+    }
+
+    const { error: saveTransactionError } = await db
+      .from('investment_packages')
+      .update({ pesajet_id: transactionId })
+      .eq('id', reference)
+      .eq('status', 'pending');
+
+    if (saveTransactionError) {
+      // The payment may already have been accepted. Keep the order pending
+      // and use the reference to reconcile its callback.
+      console.error(
+        'Could not save provider transaction ID:',
+        saveTransactionError.message
+      );
+    }
 
     return res.status(200).json({
       success: true,
       status: 'accepted',
-      reference: String(reference),
-      transaction_id: String(transactionId),
+      reference,
+      transaction_id: transactionId,
       message: 'PesaJet accepted the payment request.',
     });
   } catch (error) {
-    console.error('PesaJet handler error:', error instanceof Error ? error.message : 'Unknown');
-    await supabase.from('pesajet_transactions').update({ status: 'failed' }).eq('order_id', String(reference));
-    await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
-    return res.status(502).json({ success: false, error: 'Could not contact the payment provider.' });
+    // Network errors can happen after the provider accepted a request.
+    // Leave the order pending so it can be checked via callback/reconciliation.
+    console.error(
+      'PesaJet request error:',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
+
+    return res.status(502).json({
+      success: false,
+      reference,
+      error:
+        'The payment request result is uncertain. Check recharge status before retrying.',
+    });
   }
     }
