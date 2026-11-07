@@ -53,7 +53,7 @@ export default async function handler(req, res) {
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet-callback`;
-  const paymentsUrl = 'https://payments.pesajet.com/api/v1/payments';
+  const paymentsUrl = 'https://payments.pesajet.com/api/v1';
 
   try {
     const { error: insertError } = await supabase.from('pesajet_transactions').insert({
