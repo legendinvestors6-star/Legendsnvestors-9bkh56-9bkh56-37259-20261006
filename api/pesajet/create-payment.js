@@ -53,10 +53,9 @@ export default async function handler(req, res) {
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet-callback`;
-  const paymentsUrl = 'https://api.pesajet.com/api/v1/payments';
+  const paymentsUrl = 'https://payments.pesajet.com/api/v1/payments';
 
   try {
-    // FIX 1: Write to BOTH tables so frontend polling works
     const { error: insertError } = await supabase.from('pesajet_transactions').insert({
       order_id: String(reference),
       user_id: String(user_id),
@@ -71,7 +70,6 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: 'Could not create the payment record: ' + insertError.message });
     }
 
-    // ALSO write to recharge_orders - ignore duplicate error
     await supabase.from('recharge_orders').insert({
       id: String(reference),
       user_id: String(user_id),
@@ -105,7 +103,6 @@ export default async function handler(req, res) {
       return res.status(502).json({ success: false, error: providerData?.message || providerData?.error || `PesaJet rejected the request (${providerResponse.status}).` });
     }
 
-    // FIX 2: Don't fail if PesaJet returns different ID field - accept ANY id
     const transactionId =
       providerData?.id ||
       providerData?.transaction_id ||
@@ -113,7 +110,7 @@ export default async function handler(req, res) {
       providerData?.data?.transaction_id ||
       providerData?.data?.reference ||
       providerData?.reference ||
-      String(reference); // fallback to our reference - DON'T 502
+      String(reference);
 
     const { error: updateError } = await supabase.from('pesajet_transactions').update({ pesajet_id: String(transactionId) }).eq('order_id', String(reference));
     if (updateError) console.error('Could not save PesaJet ID:', updateError.message);
@@ -131,4 +128,4 @@ export default async function handler(req, res) {
     await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
     return res.status(502).json({ success: false, error: 'Could not contact the payment provider.' });
   }
-        }
+    }
