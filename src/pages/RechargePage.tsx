@@ -50,7 +50,6 @@ export default function RechargePage() {
   const pollOrderStatus = async (id: string, userId: string) => {
     pollAttempts.current += 1;
     if (pollAttempts.current > MAX_POLL_ATTEMPTS) { setStatus('timeout'); toast.error('Still waiting. Check Recharge Status.'); return; }
-    // Check BOTH tables - backend writes to both now
     const { data: order1 } = await supabase.from('pesajet_transactions').select('status').eq('order_id', id).maybeSingle();
     const { data: order2 } = await supabase.from('recharge_orders').select('status').eq('id', id).maybeSingle();
     const orderStatus = String((order1 as any)?.status || (order2 as any)?.status || 'pending').toLowerCase();
@@ -71,8 +70,8 @@ export default function RechargePage() {
     stopPolling(); pollAttempts.current = 0;
     const newOrderId = formatId(); setOrderId(newOrderId); setStatus('loading');
     try {
-      // FIX: Call CORRECT endpoint - was /api/payments/create (404!)
-      const response = await fetch('/api/pesajet/create-payment', {
+      // FIXED: Call /api/pesajet - NOT /api/pesajet/create-payment (404!)
+      const response = await fetch('/api/pesajet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: rechargeAmount, phone: cleanPhone, provider, reference: newOrderId, user_id: userId }),
@@ -123,5 +122,4 @@ export default function RechargePage() {
       </div><div className="h-8" />
     </div>
   );
-                                                                    }
- 
+}
