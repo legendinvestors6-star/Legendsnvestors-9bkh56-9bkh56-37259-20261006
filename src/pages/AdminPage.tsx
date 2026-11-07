@@ -1,360 +1,1517 @@
-import { useState, useEffect } from 'react';
-import { Users, CreditCard, ArrowDownToLine, BarChart3, Search, LogOut, Shield, Gift, DollarSign, Trash2, Package, Clock, TrendingUp, Wallet, UserCheck } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ArrowDownToLine,
+  BarChart3,
+  Clock,
+  CreditCard,
+  DollarSign,
+  Gift,
+  LogOut,
+  Package,
+  Search,
+  Shield,
+  Trash2,
+  TrendingUp,
+  UserCheck,
+  Users,
+  Wallet,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { getUsers, getRechargeOrders, getWithdrawOrders, getUserProducts, approveRechargeOrder, rejectRechargeOrder, approveWithdrawOrder, rejectWithdrawOrder, setCurrentUser, formatUGX, updateUser, saveUsers, getGiftCodes, createGiftCode, deleteGiftCode, getPasswordResets, approvePasswordReset, rejectPasswordReset, getTransactions, getTeamMembers, getTeamCommissions } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
+import {
+  approvePasswordReset,
+  approveWithdrawOrder,
+  createGiftCode,
+  deleteGiftCode,
+  formatUGX,
+  getGiftCodes,
+  getPasswordResets,
+  getTeamCommissions,
+  getTeamMembers,
+  getTransactions,
+  getUserProducts,
+  getUsers,
+  getWithdrawOrders,
+  rejectPasswordReset,
+  rejectWithdrawOrder,
+  setCurrentUser,
+  updateUser,
+} from '@/lib/storage';
 import type { PasswordResetRequest } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-const supabaseKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+type AdminTab =
+  | 'pesajet'
+  | 'overview'
+  | 'users'
+  | 'recharge'
+  | 'withdraw'
+  | 'products'
+  | 'gifts'
+  | 'resets';
 
-type AdminTab = 'pesajet' | 'overview' | 'users' | 'recharge' | 'withdraw' | 'products' | 'gifts' | 'resets';
+type AdminUser = {
+  id: string;
+  phone: string;
+  balance: number;
+  cumulativeIncome: number;
+  level: number;
+  referralCode: string;
+  createdAt?: string;
+  isAdmin?: boolean;
+  source: 'SUPABASE' | 'LOCAL';
+  isBlocked?: boolean;
+};
 
-// ===== PESAJET - CROSS DEVICE =====
-function PesaJetTab({ onRefresh }: { onRefresh: () => void }) {
-  const [orders, setOrders] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  
-  const load = async () => {
-    setLoading(true);
-    let combined: any[] = [];
-    try {
-      const { data } = await supabase.from('investment_packages').select('*').eq('status','pending').order('submitted_at',{ascending:false}).limit(100);
-      if(data) combined = data.map((d:any) => ({ id: d.id, userId: d.user_id, amount: Number(d.amount), paymentMethod: d.payment_method || 'MTN', phoneNumber: d.phone_number || '', status: d.status, createdAt: d.submitted_at || d.created_at, source: 'SUPABASE' }));
-    } catch {}
-    try {
-      const local = getRechargeOrders().filter(o=>o.status==='pending').map((o:any)=>({ ...o, source:'LOCAL' }));
-      combined = [...combined, ...local];
-    } catch {}
-    const uniq = Array.from(new Map(combined.map((o:any)=>[o.id, o])).values());
-    setOrders(uniq);
-    setLoading(false);
+type RechargeOrder = {
+  id: string;
+  user_id?: string | null;
+  amount?: number | string | null;
+  payment_method?: string | null;
+  phone_number?: string | null;
+  product_name?: string | null;
+  status?: string | null;
+  submitted_at?: string | null;
+  created_at?: string | null;
+  pesajet_id?: string | null;
+};
+
+const tabs: {
+  key: AdminTab;
+  label: string;
+  icon: typeof Users;
+}[] = [
+  { key: 'overview', label: 'Overview', icon: BarChart3 },
+  { key: 'pesajet', label: 'PesaJet', icon: DollarSign },
+  { key: 'users', label: 'Users', icon: Users },
+  { key: 'recharge', label: 'Recharge', icon: CreditCard },
+  { key: 'withdraw', label: 'Withdraw', icon: ArrowDownToLine },
+  { key: 'products', label: 'Products', icon: Package },
+  { key: 'gifts', label: 'Redeem Code', icon: Gift },
+  { key: 'resets', label: 'Resets', icon: Shield },
+];
+
+function getRechargeStatusStyle(statusValue: string | null | undefined) {
+  const status = String(statusValue || 'unknown').toLowerCase();
+
+  if (['completed', 'approved', 'paid', 'successful'].includes(status)) {
+    return {
+      label: 'COMPLETED',
+      color: '#4ade80',
+      background: 'rgba(74,222,128,0.12)',
+    };
+  }
+
+  if (status === 'pending') {
+    return {
+      label: 'PENDING',
+      color: '#fbbf24',
+      background: 'rgba(251,191,36,0.12)',
+    };
+  }
+
+  return {
+    label: status.toUpperCase(),
+    color: '#f87171',
+    background: 'rgba(248,113,113,0.12)',
   };
+}
 
-  const creditUserWallet = async (userId: string, phoneNumber: string, amount: number) => {
-    const amt = Number(amount);
-    for(const tbl of ['platform_users','users']){
-      try{
-        const { data } = await supabase.from(tbl).select('*').eq('id', userId).single();
-        if(data){
-          const balKey = data.wallet_balance !== undefined ? 'wallet_balance' : 'balance';
-          const newBal = Number(data[balKey]||0) + amt;
-          await supabase.from(tbl).update({ [balKey]: newBal }).eq('id', userId);
-          return true;
-        }
-      }catch{}
-      try{
-        const { data } = await supabase.from('platform_users').select('*').ilike('phone', `%${phoneNumber.slice(-9)}%`).single();
-        if(data){
-          await supabase.from('platform_users').update({ wallet_balance: Number(data.wallet_balance||0)+amt, balance: Number(data.balance||0)+amt }).eq('id', data.id);
-          return true;
-        }
-      }catch{}
-    }
-    try{
-      const users = getUsers();
-      const idx = users.findIndex(x=> x.id===userId || x.phone.includes(phoneNumber.slice(-9)));
-      if(idx!==-1){ users[idx].balance = Number(users[idx].balance||0) + amt; (users[idx] as any).cumulativeIncome = Number((users[idx] as any).cumulativeIncome||0)+amt; saveUsers(users); return true; }
-    }catch{}
-    return false;
-  };
+function getGeneralStatusStyle(statusValue: string | null | undefined) {
+  const status = String(statusValue || '').toLowerCase();
 
-  const handleApprove = async (order:any) => {
-    if(!confirm(`Confirm ${formatUGX(order.amount)} from ${order.phoneNumber}? CREDIT WALLET?`)) return;
-    setLoading(true);
-    try{
-      await supabase.from('investment_packages').update({status:'completed'}).eq('id',order.id);
-      if(order.source==='LOCAL') approveRechargeOrder(order.id);
-      await creditUserWallet(order.userId, order.phoneNumber, order.amount);
-      toast.success(`✅ ${formatUGX(order.amount)} Credited to ${order.phoneNumber}!`);
-      load(); onRefresh();
-    }catch(e:any){ toast.error(e.message); }
-    setLoading(false);
-  };
+  if (['completed', 'approved', 'active'].includes(status)) {
+    return { background: 'rgba(74,222,128,0.12)', color: '#4ade80' };
+  }
 
-  useEffect(() => { load(); const i=setInterval(load, 5000); return ()=>clearInterval(i); }, []);
-  
+  if (status === 'pending') {
+    return { background: 'rgba(251,191,36,0.12)', color: '#fbbf24' };
+  }
+
+  return { background: 'rgba(248,113,113,0.12)', color: '#f87171' };
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return 'Date unavailable';
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString();
+}
+
+function PesaJetTab({
+  orders,
+  loading,
+  loadError,
+  onRefresh,
+}: {
+  orders: RechargeOrder[];
+  loading: boolean;
+  loadError: string;
+  onRefresh: () => void;
+}) {
+  const pendingCount = orders.filter(
+    order => String(order.status).toLowerCase() === 'pending'
+  ).length;
+
   return (
     <div className="space-y-3">
-      <div className="rounded-2xl p-4" style={{ background: 'linear-gradient(135deg, #1a1100, #2d1f00)', border: '1px solid rgba(201,168,76,0.4)' }}><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}><span className="text-black font-black text-xs">PesaJet</span></div><div><p className="text-white font-black text-sm">PesaJet - MTN 0756406186 - CROSS DEVICE</p><p className="text-[#c9a84c] text-[11px]">{orders.length} pending from all phones</p></div></div></div>
-      <button onClick={load} className="w-full py-3 rounded-xl font-black text-black text-sm" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>{loading?'⏳ Checking...':`🔄 Refresh PesaJet (${orders.length}) - All Devices`}</button>
-      {orders.length===0?<div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}><p className="text-gray-400 text-sm">No pending - Waiting for recharges from any device</p></div>:orders.map((order:any)=>(
-        <div key={order.id} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid rgba(201,168,76,0.35)' }}>
-          <div className="flex justify-between mb-2"><div><p className="text-white font-black">{formatUGX(order.amount)} - {order.paymentMethod} • {order.source}</p><p className="text-gray-400 text-xs">+256 {order.phoneNumber} • User {order.userId?.slice(0,8)}</p></div><span className="text-[10px] px-2 py-1 rounded-full" style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>PENDING</span></div>
-          <div className="grid grid-cols-2 gap-2"><button onClick={()=>handleApprove(order)} className="py-3 rounded-xl text-xs font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>💰 Confirm + Credit Wallet</button><button onClick={async()=>{ if(!confirm('Reject?')) return; await supabase.from('investment_packages').update({status:'rejected'}).eq('id',order.id); toast.success('Rejected'); load(); onRefresh(); }} className="py-3 rounded-xl text-xs text-red-400" style={{ background: 'rgba(239,68,68,0.1)' }}>Reject</button></div>
+      <div
+        className="rounded-2xl p-4"
+        style={{
+          background: 'linear-gradient(135deg, #1a1100, #2d1f00)',
+          border: '1px solid rgba(201,168,76,0.4)',
+        }}
+      >
+        <p className="text-white font-black text-sm">PesaJet Recharge Monitor</p>
+        <p className="text-[#c9a84c] text-[11px] mt-1">
+          {pendingCount} pending • {orders.length} total recharge records
+        </p>
+        <p className="text-gray-400 text-[11px] mt-1">
+          Payment status and wallet credit are handled by the verified server callback.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={loading}
+        className="w-full py-3 rounded-xl font-black text-black text-sm disabled:opacity-60"
+        style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}
+      >
+        {loading ? 'Checking…' : 'Refresh PesaJet records'}
+      </button>
+
+      {loadError && (
+        <div className="rounded-xl p-3 text-sm text-red-300 bg-red-950/30">
+          {loadError}
         </div>
-      ))}
+      )}
+
+      {!loadError && !loading && orders.length === 0 && (
+        <div
+          className="rounded-2xl p-10 text-center"
+          style={{ background: '#111', border: '1px dashed #333' }}
+        >
+          <p className="text-gray-400 text-sm">No recharge records found.</p>
+        </div>
+      )}
+
+      {orders.map(order => {
+        const status = getRechargeStatusStyle(order.status);
+
+        return (
+          <div
+            key={order.id}
+            className="rounded-2xl p-4"
+            style={{
+              background: '#111',
+              border: '1px solid rgba(201,168,76,0.3)',
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-white font-black">
+                  {formatUGX(Number(order.amount || 0))}
+                </p>
+                <p className="text-gray-400 text-xs mt-1">
+                  {order.payment_method || 'PesaJet'} • {order.phone_number || 'No phone'}
+                </p>
+                <p className="text-gray-500 text-[10px] mt-1">
+                  User: {String(order.user_id || '—').slice(0, 12)}
+                </p>
+                <p className="text-gray-500 text-[10px] mt-1 break-all">
+                  Reference: {order.id}
+                </p>
+                {order.pesajet_id && (
+                  <p className="text-gray-500 text-[10px] mt-1 break-all">
+                    Provider transaction: {order.pesajet_id}
+                  </p>
+                )}
+              </div>
+
+              <span
+                className="shrink-0 px-2 py-1 rounded-full text-[10px] font-black"
+                style={{
+                  color: status.color,
+                  background: status.background,
+                }}
+              >
+                {status.label}
+              </span>
+            </div>
+
+            <p className="text-gray-600 text-[10px] mt-3">
+              {formatDate(order.submitted_at || order.created_at)}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
 export default function AdminPage() {
   const navigate = useNavigate();
+
   const [tab, setTab] = useState<AdminTab>('users');
   const [searchQ, setSearchQ] = useState('');
   const [refresh, setRefresh] = useState(0);
-  const [supaUsers, setSupaUsers] = useState<any[]>([]);
-  const [supaRecharge, setSupaRecharge] = useState<any[]>([]);
-  const [supaAll, setSupaAll] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  const [supaUsers, setSupaUsers] = useState<AdminUser[]>([]);
+  const [rechargeOrders, setRechargeOrders] = useState<RechargeOrder[]>([]);
   const [supaWithdraw, setSupaWithdraw] = useState<any[]>([]);
   const [supaProducts, setSupaProducts] = useState<any[]>([]);
 
-  const loadAllFromSupabase = async () => {
-    // Users from all devices
-    let allUsers: any[] = [];
-    try{
-      const { data: pUsers } = await supabase.from('platform_users').select('*').order('created_at',{ascending:false}).limit(500);
-      if(pUsers && pUsers.length>0){
-        allUsers = pUsers.map((u:any)=>({ id: u.id, phone: u.phone || u.phone_number || '', balance: Number(u.wallet_balance || u.balance || 0), cumulativeIncome: Number(u.cumulative_income || u.cumulativeIncome || 0), level: u.level || 1, referralCode: u.referral_code || u.referralCode || u.id.slice(0,6).toUpperCase(), createdAt: u.created_at || new Date().toISOString(), isAdmin: false, source: 'SUPABASE' }));
-      } else {
-        const { data: usersTbl } = await supabase.from('users').select('*').limit(500);
-        if(usersTbl) allUsers = usersTbl.map((u:any)=>({ id: u.id, phone: u.phone||'', balance: Number(u.balance||0), cumulativeIncome: Number(u.cumulative_income||0), level: 1, referralCode: u.referral_code||'N/A', createdAt: u.created_at, isAdmin: false, source: 'SUPABASE' }));
+  const loadAllFromSupabase = useCallback(async () => {
+    setLoading(true);
+    setLoadError('');
+
+    const [
+      usersResult,
+      rechargeResult,
+      withdrawalsResult,
+      productsResult,
+    ] = await Promise.all([
+      supabase
+        .from('platform_users')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500),
+
+      supabase
+        .from('investment_packages')
+        .select('*')
+        .eq('product_name', 'RECHARGE')
+        .order('submitted_at', { ascending: false })
+        .limit(500),
+
+      supabase
+        .from('withdraw_orders')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500),
+
+      supabase
+        .from('user_products')
+        .select('*')
+        .order('purchase_date', { ascending: false })
+        .limit(500),
+    ]);
+
+    if (usersResult.error) {
+      console.error('Admin users load failed:', usersResult.error.message);
+    }
+
+    if (rechargeResult.error) {
+      console.error('Admin recharge load failed:', rechargeResult.error.message);
+      setLoadError(
+        'Could not load recharge records. Check the investment_packages table and Supabase RLS policies.'
+      );
+    } else {
+      setRechargeOrders((rechargeResult.data || []) as RechargeOrder[]);
+    }
+
+    if (withdrawalsResult.error) {
+      console.error('Admin withdrawals load failed:', withdrawalsResult.error.message);
+    } else {
+      setSupaWithdraw(withdrawalsResult.data || []);
+    }
+
+    if (productsResult.error) {
+      console.error('Admin products load failed:', productsResult.error.message);
+    } else {
+      setSupaProducts(productsResult.data || []);
+    }
+
+    const databaseUsers: AdminUser[] = (usersResult.data || []).map((user: any) => ({
+      id: String(user.id),
+      phone: String(user.phone || user.phone_number || user.mobile || ''),
+      balance: Number(user.wallet_balance ?? user.balance ?? 0),
+      cumulativeIncome: Number(
+        user.cumulative_income ?? user.total_earnings ?? 0
+      ),
+      level: Number(user.level || 1),
+      referralCode: String(
+        user.referral_code ||
+          user.own_referral_code ||
+          String(user.id).slice(0, 6).toUpperCase()
+      ),
+      createdAt: user.created_at || undefined,
+      isAdmin: false,
+      source: 'SUPABASE',
+      isBlocked: Boolean(user.is_blocked || user.is_banned),
+    }));
+
+    let mergedUsers = [...databaseUsers];
+
+    try {
+      const localUsers = getUsers()
+        .filter(user => !user.isAdmin)
+        .map((user: any): AdminUser => ({
+          id: String(user.id),
+          phone: String(user.phone || ''),
+          balance: Number(user.balance || 0),
+          cumulativeIncome: Number(user.cumulativeIncome || 0),
+          level: Number(user.level || 1),
+          referralCode: String(user.referralCode || 'N/A'),
+          createdAt: user.createdAt,
+          isAdmin: false,
+          source: 'LOCAL',
+          isBlocked: Boolean(user.isBlocked),
+        }));
+
+      for (const localUser of localUsers) {
+        const duplicate = mergedUsers.some(
+          user => user.id === localUser.id || user.phone === localUser.phone
+        );
+
+        if (!duplicate) mergedUsers.push(localUser);
       }
-    }catch(e){ console.error('users load failed', e); }
+    } catch (error) {
+      console.error('Could not load local users:', error);
+    }
 
-    try{
-      const localUsers = getUsers().filter(u => !u.isAdmin).map(u=>({ ...u, source: 'LOCAL' }));
-      const merged = [...allUsers];
-      for(const lu of localUsers){ if(!merged.find(m=> m.phone===lu.phone || m.id===lu.id)) merged.push(lu as any); }
-      if(!merged.find(m=> m.phone==='0750757774')){
-        merged.unshift({ id: 'user-0750757774', phone: '0750757774', balance: 30000, cumulativeIncome: 0, level: 1, referralCode: 'N/A', createdAt: '2026-11-04', isAdmin: false, source: 'LOCAL' } as any);
-      }
-      setSupaUsers(merged);
-    }catch{ setSupaUsers(allUsers); }
+    setSupaUsers(mergedUsers);
+    setLoading(false);
+  }, []);
 
-    // Recharges, withdraws, products from all devices
-    try{
-      const { data: recharges } = await supabase.from('investment_packages').select('*').order('submitted_at',{ascending:false}).limit(500);
-      setSupaAll(recharges||[]);
-      setSupaRecharge((recharges||[]).filter((d:any)=>d.status==='pending'));
-    }catch{}
-    try{
-      const { data: withdraws } = await supabase.from('withdraw_orders').select('*').order('created_at',{ascending:false}).limit(500);
-      setSupaWithdraw(withdraws||[]);
-    }catch{}
-    try{
-      const { data: prods } = await supabase.from('user_products').select('*').order('purchase_date',{ascending:false}).limit(500);
-      setSupaProducts(prods||[]);
-    }catch{}
-  };
+  useEffect(() => {
+    void loadAllFromSupabase();
 
-  useEffect(()=>{ loadAllFromSupabase(); },[refresh]);
+    const timer = setInterval(() => {
+      void loadAllFromSupabase();
+    }, 15000);
 
-  const users = supaUsers.length>0 ? supaUsers : getUsers().filter(u => !u.isAdmin);
-  const rechargeOrdersLocal = getRechargeOrders();
-  const withdrawOrders = [...supaWithdraw.map((w:any)=>({ id: w.id, userId: w.user_id, amount: w.amount, phoneNumber: w.phone_number, status: w.status, createdAt: w.created_at, source: 'SUPABASE' })), ...getWithdrawOrders().map(o=>({...o, source:'LOCAL'}))];
-  const localUserProducts = getUserProducts();
-  const allUserProducts = [...supaProducts.map((p:any)=>({ id: p.id, userId: p.user_id, productId: p.product_id, productName: p.product_name, price: p.price, dailyIncome: p.daily_income, purchaseDate: p.purchase_date, expiryDate: p.expiry_date, status: p.status, source: 'SUPABASE' })), ...localUserProducts.map(p=>({...p, source:'LOCAL'}))];
+    return () => clearInterval(timer);
+  }, [loadAllFromSupabase, refresh]);
+
+  const users =
+    supaUsers.length > 0
+      ? supaUsers
+      : getUsers()
+          .filter(user => !user.isAdmin)
+          .map((user: any): AdminUser => ({
+            id: String(user.id),
+            phone: String(user.phone || ''),
+            balance: Number(user.balance || 0),
+            cumulativeIncome: Number(user.cumulativeIncome || 0),
+            level: Number(user.level || 1),
+            referralCode: String(user.referralCode || 'N/A'),
+            createdAt: user.createdAt,
+            isAdmin: false,
+            source: 'LOCAL',
+            isBlocked: Boolean(user.isBlocked),
+          }));
+
+  const localWithdrawals = getWithdrawOrders().map((order: any) => ({
+    id: String(order.id),
+    userId: String(order.userId || ''),
+    amount: Number(order.amount || 0),
+    phoneNumber: String(order.phoneNumber || ''),
+    status: String(order.status || 'pending'),
+    createdAt: order.createdAt,
+    source: 'LOCAL',
+  }));
+
+  const databaseWithdrawals = supaWithdraw.map((order: any) => ({
+    id: String(order.id),
+    userId: String(order.user_id || ''),
+    amount: Number(order.amount || 0),
+    phoneNumber: String(order.phone_number || ''),
+    status: String(order.status || 'pending'),
+    createdAt: order.created_at,
+    source: 'SUPABASE',
+  }));
+
+  const withdrawOrders = [...databaseWithdrawals, ...localWithdrawals];
+
+  const localProducts = getUserProducts().map((product: any) => ({
+    ...product,
+    userId: String(product.userId || ''),
+    productId: product.productId,
+    product_id: product.product_id,
+    productName: product.productName || product.product_name,
+    price: product.price,
+    dailyIncome: product.dailyIncome || product.daily_income,
+    purchaseDate: product.purchaseDate || product.purchase_date,
+    status: product.status,
+    source: 'LOCAL',
+  }));
+
+  const databaseProducts = supaProducts.map((product: any) => ({
+    ...product,
+    userId: String(product.user_id || ''),
+    productId: product.product_id,
+    product_id: product.product_id,
+    productName: product.product_name,
+    price: product.price,
+    dailyIncome: product.daily_income,
+    purchaseDate: product.purchase_date,
+    status: product.status,
+    source: 'SUPABASE',
+  }));
+
+  const allUserProducts = [...databaseProducts, ...localProducts];
   const transactions = getTransactions();
-  
-  const pendingRechargeCount = supaRecharge.length + rechargeOrdersLocal.filter(o=>o.status==='pending').length;
-  const pendingWithdraw = withdrawOrders.filter(o => o.status === 'pending');
-  const passwordResets = getPasswordResets();
-  
+
+  const pendingRechargeCount = rechargeOrders.filter(
+    order => String(order.status).toLowerCase() === 'pending'
+  ).length;
+
+  const pendingWithdrawals = withdrawOrders.filter(
+    order => String(order.status).toLowerCase() === 'pending'
+  );
+
+  const completedRechargeOrders = rechargeOrders.filter(order =>
+    ['completed', 'approved', 'paid', 'successful'].includes(
+      String(order.status).toLowerCase()
+    )
+  );
+
   const totalUsers = users.length;
-  const activePackages = allUserProducts.filter(p=>p.status==='active').length;
+  const activeProductsCount = allUserProducts.filter(
+    product => String(product.status).toLowerCase() === 'active'
+  ).length;
   const pendingPackages = pendingRechargeCount;
-  const totalDeposits = supaAll.filter((d:any)=>d.status==='completed').reduce((s:any,o:any)=>s+Number(o.amount||0),0);
-  const totalWithdrawals = withdrawOrders.filter(o=>o.status==='completed').reduce((s,o)=>s+Number(o.amount||0),0);
-  const pendingPayouts = withdrawOrders.filter(o=>o.status==='pending').reduce((s,o)=>s+Number(o.amount||0),0);
-  const earningsDistributed = users.reduce((s:any,u:any)=>s+Number(u.cumulativeIncome||0),0);
+
+  const totalDeposits = completedRechargeOrders.reduce(
+    (sum, order) => sum + Number(order.amount || 0),
+    0
+  );
+
+  const totalWithdrawals = withdrawOrders
+    .filter(order =>
+      ['completed', 'approved'].includes(String(order.status).toLowerCase())
+    )
+    .reduce((sum, order) => sum + Number(order.amount || 0), 0);
+
+  const pendingPayouts = pendingWithdrawals.reduce(
+    (sum, order) => sum + Number(order.amount || 0),
+    0
+  );
+
+  const earningsDistributed = users.reduce(
+    (sum, user) => sum + Number(user.cumulativeIncome || 0),
+    0
+  );
+
   const referralEarnings = earningsDistributed;
 
-  const tabs = [
-    { key: 'overview' as AdminTab, label: 'Overview', icon: BarChart3 },
-    { key: 'pesajet' as AdminTab, label: 'PesaJet', icon: DollarSign, badge: pendingRechargeCount },
-    { key: 'users' as AdminTab, label: 'Users', icon: Users, badge: users.length },
-    { key: 'recharge' as AdminTab, label: 'Recharge', icon: CreditCard, badge: pendingRechargeCount },
-    { key: 'withdraw' as AdminTab, label: 'Withdraw', icon: ArrowDownToLine, badge: pendingWithdraw.length },
-    { key: 'products' as AdminTab, label: 'Products', icon: Package, badge: activePackages },
-    { key: 'gifts' as AdminTab, label: 'Redeem Code', icon: Gift },
-    { key: 'resets' as AdminTab, label: 'Resets', icon: Shield, badge: passwordResets.filter(r=>r.status==='pending').length },
-  ];
+  const passwordResets = getPasswordResets();
+  const pendingResetCount = passwordResets.filter(
+    request => request.status === 'pending'
+  ).length;
 
-  const getStatusStyle = (status:string) => status==='completed'?{ background: 'rgba(201,168,76,0.15)', color: '#c9a84c' }:status==='pending'?{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }:{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' };
-
-  const handleAddBalance = async (user:any, isDeduct=false) => {
-    const amtStr = prompt(`${isDeduct?'Deduct from':'Add balance to'} ${user.phone} (UGX):`);
-    const amt = parseInt(amtStr||'0');
-    if(!amt || amt<=0) return;
-    const finalAmt = isDeduct ? -amt : amt;
-    try{
-      for(const tbl of ['platform_users','users']){
-        try{
-          const { data } = await supabase.from(tbl).select('*').eq('id', user.id).single();
-          if(data){
-            const balKey = data.wallet_balance !== undefined ? 'wallet_balance' : 'balance';
-            const newBal = Math.max(0, Number(data[balKey]||0)+finalAmt);
-            await supabase.from(tbl).update({ [balKey]: newBal }).eq('id', user.id);
-            break;
-          }
-        }catch{
-          try{
-            const { data } = await supabase.from('platform_users').select('*').ilike('phone', `%${user.phone.slice(-9)}%`).single();
-            if(data){
-              await supabase.from('platform_users').update({ wallet_balance: Math.max(0, Number(data.wallet_balance||0)+finalAmt), balance: Math.max(0, Number(data.balance||0)+finalAmt) }).eq('id', data.id);
-              break;
-            }
-          }catch{}
-        }
-      }
-    }catch{}
-    try{ updateUser(user.id,{balance: Math.max(0, Number(user.balance||0)+finalAmt)} as any); }catch{}
-    toast.success(`${isDeduct?'Deducted':'Added'} ${formatUGX(amt)} - Cross-device!`);
-    setRefresh(r=>r+1);
+  const tabBadges: Partial<Record<AdminTab, number>> = {
+    pesajet: pendingRechargeCount,
+    users: users.length,
+    recharge: pendingRechargeCount,
+    withdraw: pendingWithdrawals.length,
+    products: activeProductsCount,
+    resets: pendingResetCount,
   };
 
+  const handleLogout = () => {
+    setCurrentUser(null);
+    navigate('/login');
+  };
+
+  const handleAddBalance = async (
+    user: AdminUser,
+    isDeduct = false
+  ) => {
+    const input = window.prompt(
+      `${isDeduct ? 'Deduct from' : 'Add balance to'} ${user.phone} (UGX):`
+    );
+
+    if (input === null) return;
+
+    const amount = Number.parseInt(input, 10);
+
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      toast.error('Enter a valid positive amount.');
+      return;
+    }
+
+    const delta = isDeduct ? -amount : amount;
+
+    if (user.source === 'SUPABASE') {
+      const newBalance = Math.max(0, Number(user.balance || 0) + delta);
+
+      const { error } = await supabase
+        .from('platform_users')
+        .update({ wallet_balance: newBalance })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Could not update user wallet:', error.message);
+        toast.error('Could not update this wallet.');
+        return;
+      }
+    } else {
+      try {
+        updateUser(user.id, {
+          balance: Math.max(0, Number(user.balance || 0) + delta),
+        } as any);
+      } catch (error) {
+        console.error('Could not update local user wallet:', error);
+        toast.error('Could not update this local wallet.');
+        return;
+      }
+    }
+
+    toast.success(
+      `${isDeduct ? 'Deducted' : 'Added'} ${formatUGX(amount)} for ${user.phone}.`
+    );
+    setRefresh(value => value + 1);
+  };
+
+  const handleBlockUser = async (user: AdminUser) => {
+    const shouldBlock = !user.isBlocked;
+
+    if (!window.confirm(`${shouldBlock ? 'Block' : 'Unblock'} ${user.phone}?`)) {
+      return;
+    }
+
+    if (user.source === 'SUPABASE') {
+      const { error } = await supabase
+        .from('platform_users')
+        .update({
+          is_blocked: shouldBlock,
+          is_banned: shouldBlock,
+        })
+        .eq('id', user.id);
+
+      if (error) {
+        console.error('Could not update user block status:', error.message);
+        toast.error('Could not update user status.');
+        return;
+      }
+    } else {
+      try {
+        updateUser(user.id, { isBlocked: shouldBlock } as any);
+      } catch (error) {
+        console.error('Could not update local user:', error);
+        toast.error('Could not update user status.');
+        return;
+      }
+    }
+
+    toast.success(shouldBlock ? 'User blocked.' : 'User unblocked.');
+    setRefresh(value => value + 1);
+  };
+
+  const handleWithdrawalDecision = async (
+    order: (typeof withdrawOrders)[number],
+    decision: 'approve' | 'reject'
+  ) => {
+    if (order.source === 'SUPABASE') {
+      const nextStatus = decision === 'approve' ? 'approved' : 'rejected';
+
+      const { error } = await supabase
+        .from('withdraw_orders')
+        .update({ status: nextStatus })
+        .eq('id', order.id)
+        .eq('status', 'pending');
+
+      if (error) {
+        console.error('Could not update withdrawal:', error.message);
+        toast.error('Could not update withdrawal.');
+        return;
+      }
+    } else if (decision === 'approve') {
+      approveWithdrawOrder(order.id);
+    } else {
+      rejectWithdrawOrder(order.id);
+    }
+
+    toast.success(
+      decision === 'approve' ? 'Withdrawal approved.' : 'Withdrawal rejected.'
+    );
+    setRefresh(value => value + 1);
+  };
+
+  const handleCreateGiftCode = () => {
+    const amount = Number.parseInt(
+      window.prompt('Gift code amount in UGX:') || '',
+      10
+    );
+
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      toast.error('Enter a valid positive amount.');
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+
+    try {
+      createGiftCode(amount, undefined, expiresAt);
+      toast.success('Redeem code created.');
+      setRefresh(value => value + 1);
+    } catch (error) {
+      console.error('Could not create gift code:', error);
+      toast.error('Could not create redeem code.');
+    }
+  };
+
+  const filteredUsers = users.filter(user =>
+    user.phone.toLowerCase().includes(searchQ.toLowerCase())
+  );
+
   return (
-    <div className="min-h-screen" style={{ background: '#000000' }}>
-      <div className="flex items-center justify-between p-4" style={{ background: 'linear-gradient(135deg, #000000, #1a1100)', borderBottom: '1px solid rgba(201,168,76,0.2)' }}>
-        <div className="flex items-center gap-2"><div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}><Shield size={18} className="text-black"/></div><span className="text-white font-black">Admin Panel</span><span className="text-[9px] font-black text-black px-2 py-0.5 rounded-full" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>{users.length} USERS • {activePackages} ACTIVE • ALL DEVICES</span></div>
-        <button onClick={()=>{setCurrentUser(null);navigate('/login');}} className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><LogOut size={15} className="text-gray-400"/></button>
-      </div>
-      <div className="flex gap-0 overflow-x-auto" style={{ background: '#0a0a0a', borderBottom: '1px solid #1a1a1a' }}>
-        {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} className="flex-shrink-0 flex items-center gap-1.5 px-3 py-3 text-xs font-bold relative" style={tab===t.key?{color:'#c9a84c',borderBottom:'2px solid #c9a84c'}:{color:'#666'}}><t.icon size={13}/>{t.label}{t.badge!==undefined&&t.badge>0&&<span className="absolute top-1 right-0.5 w-4 h-4 rounded-full text-[9px] font-black text-black flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>{t.badge}</span>}</button>)}
-      </div>
-      <div className="p-4 pb-20">
-        {tab==='overview'&&(
+    <div className="min-h-screen bg-black">
+      <header
+        className="flex items-center justify-between p-4"
+        style={{
+          background: 'linear-gradient(135deg, #000000, #1a1100)',
+          borderBottom: '1px solid rgba(201,168,76,0.2)',
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}
+          >
+            <Shield size={18} className="text-black" />
+          </div>
+          <span className="text-white font-black">Admin Panel</span>
+          <span
+            className="hidden sm:inline text-[9px] font-black text-black px-2 py-0.5 rounded-full"
+            style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}
+          >
+            {totalUsers} USERS • {activeProductsCount} ACTIVE
+          </span>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: '#111', border: '1px solid #2a2a2a' }}
+        >
+          <LogOut size={15} className="text-gray-400" />
+        </button>
+      </header>
+
+      <nav
+        className="flex overflow-x-auto"
+        style={{ background: '#0a0a0a', borderBottom: '1px solid #1a1a1a' }}
+      >
+        {tabs.map(item => {
+          const Icon = item.icon;
+          const badge = tabBadges[item.key] || 0;
+
+          return (
+            <button
+              type="button"
+              key={item.key}
+              onClick={() => setTab(item.key)}
+              className="relative flex flex-shrink-0 items-center gap-1.5 px-3 py-3 text-xs font-bold"
+              style={
+                tab === item.key
+                  ? { color: '#c9a84c', borderBottom: '2px solid #c9a84c' }
+                  : { color: '#777' }
+              }
+            >
+              <Icon size={13} />
+              {item.label}
+              {badge > 0 && (
+                <span
+                  className="absolute top-1 right-0.5 w-4 h-4 rounded-full text-[9px] font-black text-black flex items-center justify-center"
+                  style={{
+                    background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+                  }}
+                >
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      <main className="p-4 pb-20">
+        {(loading || loadError) && (
+          <div className="mb-3 text-xs">
+            {loading && <p className="text-gray-500">Refreshing admin data…</p>}
+            {loadError && <p className="text-red-300">{loadError}</p>}
+          </div>
+        )}
+
+        {tab === 'overview' && (
           <div className="space-y-3">
-            <button onClick={()=>{loadAllFromSupabase(); setRefresh(r=>r+1);}} className="w-full py-2 rounded-xl text-xs text-[#c9a84c]" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.2)' }}>🔄 Refresh Everything From All Devices - {users.length} users, {supaRecharge.length} pending recharges, {supaWithdraw.length} withdraws, {supaProducts.length} products</button>
+            <button
+              type="button"
+              onClick={() => setRefresh(value => value + 1)}
+              className="w-full py-2 rounded-xl text-xs text-[#c9a84c]"
+              style={{
+                background: '#111',
+                border: '1px solid rgba(201,168,76,0.2)',
+              }}
+            >
+              Refresh all devices • {totalUsers} users • {pendingRechargeCount} pending recharges
+            </button>
+
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#2563eb' }}><Users size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Total Users (All Devices)</p><p className="text-[#60a5fa] font-black text-xl mt-1">{totalUsers}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#16a34a' }}><Package size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Active Products (All Devices)</p><p className="text-[#4ade80] font-black text-xl mt-1">{activePackages}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#d97706' }}><Clock size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Pending Packages</p><p className="text-[#fb923c] font-black text-xl mt-1">{pendingPackages}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#7c3aed' }}><TrendingUp size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Total Deposits</p><p className="text-[#c084fc] font-black text-sm mt-1">{formatUGX(totalDeposits)}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#dc2626' }}><ArrowDownToLine size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Total Withdrawals</p><p className="text-[#f87171] font-black text-sm mt-1">{formatUGX(totalWithdrawals)}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#ea580c' }}><Wallet size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Pending Payouts</p><p className="text-[#fb923c] font-black text-sm mt-1">{formatUGX(pendingPayouts)}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#0d9488' }}><TrendingUp size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Earnings Distributed</p><p className="text-[#2dd4bf] font-black text-sm mt-1">{formatUGX(earningsDistributed)}</p></div>
-              <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}><div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: '#db2777' }}><UserCheck size={20} className="text-white"/></div><p className="text-gray-400 text-[12px]">Referral Earnings</p><p className="text-[#f472b6] font-black text-sm mt-1">{formatUGX(referralEarnings)}</p></div>
+              <StatCard
+                icon={<Users size={20} className="text-white" />}
+                iconBg="#2563eb"
+                label="Total Users"
+                value={String(totalUsers)}
+                valueColor="#60a5fa"
+              />
+              <StatCard
+                icon={<Package size={20} className="text-white" />}
+                iconBg="#16a34a"
+                label="Active Products"
+                value={String(activeProductsCount)}
+                valueColor="#4ade80"
+              />
+              <StatCard
+                icon={<Clock size={20} className="text-white" />}
+                iconBg="#d97706"
+                label="Pending Recharges"
+                value={String(pendingPackages)}
+                valueColor="#fb923c"
+              />
+              <StatCard
+                icon={<TrendingUp size={20} className="text-white" />}
+                iconBg="#7c3aed"
+                label="Completed Deposits"
+                value={formatUGX(totalDeposits)}
+                valueColor="#c084fc"
+              />
+              <StatCard
+                icon={<ArrowDownToLine size={20} className="text-white" />}
+                iconBg="#dc2626"
+                label="Total Withdrawals"
+                value={formatUGX(totalWithdrawals)}
+                valueColor="#f87171"
+              />
+              <StatCard
+                icon={<Wallet size={20} className="text-white" />}
+                iconBg="#ea580c"
+                label="Pending Payouts"
+                value={formatUGX(pendingPayouts)}
+                valueColor="#fb923c"
+              />
+              <StatCard
+                icon={<TrendingUp size={20} className="text-white" />}
+                iconBg="#0d9488"
+                label="Earnings Distributed"
+                value={formatUGX(earningsDistributed)}
+                valueColor="#2dd4bf"
+              />
+              <StatCard
+                icon={<UserCheck size={20} className="text-white" />}
+                iconBg="#db2777"
+                label="Referral Earnings"
+                value={formatUGX(referralEarnings)}
+                valueColor="#f472b6"
+              />
             </div>
           </div>
         )}
-        {tab==='pesajet'&&<PesaJetTab onRefresh={()=>{setRefresh(r=>r+1); loadAllFromSupabase();}} />}
-        {tab==='users'&&(
+
+        {tab === 'pesajet' && (
+          <PesaJetTab
+            orders={rechargeOrders}
+            loading={loading}
+            loadError={loadError}
+            onRefresh={() => void loadAllFromSupabase()}
+          />
+        )}
+
+        {tab === 'users' && (
           <div className="space-y-3">
-            <button onClick={()=>{loadAllFromSupabase(); setRefresh(r=>r+1);}} className="w-full py-2.5 rounded-xl font-black text-black text-xs" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>🔄 Refresh All Users From All Devices ({users.length}) - Cross-Device</button>
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><Search size={14} className="text-gray-500"/><input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search phone 0750757774..." className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600"/></div>
-            
-            {users.filter(u=> (u.phone||'').toLowerCase().includes(searchQ.toLowerCase())).map(user=>{
-              const allRecharge = [...rechargeOrdersLocal, ...supaAll.map((s:any)=>({ userId: s.user_id, amount: s.amount, status: s.status }))].filter(o=> o.userId===user.id || (o as any).phone_number===user.phone);
-              const totalDeposited = allRecharge.filter(o=> o.status==='completed').reduce((s,o)=> s+Number(o.amount||0),0);
-              const approvedCount = allRecharge.filter(o=> o.status==='completed').length;
-              const allWithdraw = withdrawOrders.filter(o=> o.userId===user.id || (o as any).phoneNumber===user.phone);
-              const totalWithdrawn = allWithdraw.filter(o=> o.status==='completed').reduce((s,o)=> s+Number(o.amount||0),0);
-              const pendingWithdraw = allWithdraw.filter(o=> o.status==='pending').length;
-              const userProds = allUserProducts.filter(p=> p.userId===user.id);
-              const activeProds = userProds.filter(p=> p.status==='active').length;
-              const expiredProds = userProds.filter(p=> p.status==='expired').length;
-              const totalProds = userProds.length;
+            <button
+              type="button"
+              onClick={() => setRefresh(value => value + 1)}
+              className="w-full py-2.5 rounded-xl font-black text-black text-xs"
+              style={{
+                background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+              }}
+            >
+              Refresh users ({users.length})
+            </button>
+
+            <div
+              className="flex items-center gap-2 rounded-xl px-3 py-2.5"
+              style={{ background: '#111', border: '1px solid #2a2a2a' }}
+            >
+              <Search size={14} className="text-gray-500" />
+              <input
+                value={searchQ}
+                onChange={event => setSearchQ(event.target.value)}
+                placeholder="Search by phone number"
+                className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600"
+              />
+            </div>
+
+            {filteredUsers.map(user => {
+              const userRecharges = rechargeOrders.filter(
+                order =>
+                  order.user_id === user.id ||
+                  Boolean(
+                    order.phone_number &&
+                      order.phone_number.replace(/\D/g, '').slice(-9) ===
+                        user.phone.replace(/\D/g, '').slice(-9)
+                  )
+              );
+
+              const userDeposits = userRecharges.filter(order =>
+                ['completed', 'approved', 'paid', 'successful'].includes(
+                  String(order.status).toLowerCase()
+                )
+              );
+
+              const depositedAmount = userDeposits.reduce(
+                (sum, order) => sum + Number(order.amount || 0),
+                0
+              );
+
+              const userWithdrawals = withdrawOrders.filter(
+                order =>
+                  order.userId === user.id ||
+                  (order.phoneNumber &&
+                    order.phoneNumber.replace(/\D/g, '').slice(-9) ===
+                      user.phone.replace(/\D/g, '').slice(-9))
+              );
+
+              const withdrawnAmount = userWithdrawals
+                .filter(order =>
+                  ['completed', 'approved'].includes(
+                    String(order.status).toLowerCase()
+                  )
+                )
+                .reduce((sum, order) => sum + Number(order.amount || 0), 0);
+
+              const pendingUserWithdrawals = userWithdrawals.filter(
+                order => String(order.status).toLowerCase() === 'pending'
+              ).length;
+
+              const userProducts = allUserProducts.filter(
+                product => product.userId === user.id
+              );
+
+              const activeUserProducts = userProducts.filter(
+                product => String(product.status).toLowerCase() === 'active'
+              ).length;
+
+              const expiredUserProducts = userProducts.filter(
+                product => String(product.status).toLowerCase() === 'expired'
+              ).length;
+
               const team = getTeamMembers(user.id);
               const commissions = getTeamCommissions(user.id);
-              const referralTotal = (commissions.level1||0)+(commissions.level2||0)+(commissions.level3||0);
-              const sevenDay = transactions.filter(t=> (t as any).userId===user.id && (t as any).type==='daily-income' && new Date((t as any).createdAt).getTime() > Date.now()-7*24*60*60*1000).reduce((s,t)=> s+Number((t as any).amount||0),0);
-              const memberSince = user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-GB') : '11/4/26';
+              const referralTotal =
+                Number(commissions.level1 || 0) +
+                Number(commissions.level2 || 0) +
+                Number(commissions.level3 || 0);
 
-              return(
-              <div key={user.id} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid rgba(201,168,76,0.3)' }}>
-                <div className="flex justify-between items-start mb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}><span className="text-black font-black text-sm">{user.phone.slice(-2)}</span></div>
-                    <div>
-                      <p className="text-white font-black text-base">{user.phone} {(user as any).source==='SUPABASE'&&<span className="text-[9px] text-green-400">• SUPABASE</span>}{(user as any).source==='LOCAL'&&<span className="text-[9px] text-yellow-400">• LOCAL</span>}</p>
-                      <p className="text-gray-500 text-[11px]">Lv{user.level||1} • #{user.referralCode||'N/A'} • Member since {memberSince}</p>
+              const sevenDayEarnings = transactions
+                .filter(
+                  transaction =>
+                    String((transaction as any).userId) === user.id &&
+                    (transaction as any).type === 'daily-income' &&
+                    new Date((transaction as any).createdAt).getTime() >
+                      Date.now() - 7 * 24 * 60 * 60 * 1000
+                )
+                .reduce(
+                  (sum, transaction) =>
+                    sum + Number((transaction as any).amount || 0),
+                  0
+                );
+
+              return (
+                <section
+                  key={user.id}
+                  className="rounded-2xl p-4"
+                  style={{
+                    background: '#111',
+                    border: '1px solid rgba(201,168,76,0.3)',
+                  }}
+                >
+                  <div className="flex justify-between items-start mb-3 gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0"
+                        style={{
+                          background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+                        }}
+                      >
+                        <span className="text-black font-black text-sm">
+                          {user.phone.slice(-2) || '—'}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-white font-black text-base break-all">
+                          {user.phone || 'No phone'}{' '}
+                          <span
+                            className={
+                              user.source === 'SUPABASE'
+                                ? 'text-[9px] text-green-400'
+                                : 'text-[9px] text-yellow-400'
+                            }
+                          >
+                            • {user.source}
+                          </span>
+                        </p>
+                        <p className="text-gray-500 text-[11px]">
+                          Lv{user.level} • #{user.referralCode} • Member since{' '}
+                          {user.createdAt
+                            ? new Date(user.createdAt).toLocaleDateString('en-GB')
+                            : 'Unknown'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-[11px] font-black text-black px-3 py-1 rounded-full" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>Lv {user.level||1}</span>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <div className="rounded-xl p-3" style={{ background: 'linear-gradient(135deg, #1a1100, #1a1a1a)', border: '1px solid rgba(201,168,76,0.25)' }}>
-                    <p className="text-gray-400 text-[10px] uppercase">Current Balance</p>
-                    <p className="text-[#c9a84c] font-black text-lg">{formatUGX(user.balance)}</p>
+                    <span
+                      className="text-[11px] font-black text-black px-3 py-1 rounded-full shrink-0"
+                      style={{
+                        background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+                      }}
+                    >
+                      Lv {user.level}
+                    </span>
                   </div>
-                  <div className="rounded-xl p-3" style={{ background: '#0a0a0a', border: '1px solid #1e1e1e' }}>
-                    <p className="text-gray-400 text-[10px] uppercase">Cumulative Income</p>
-                    <p className="text-white font-bold text-lg">{formatUGX((user as any).cumulativeIncome||0)}</p>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-                    <p className="text-gray-500 text-[10px]">Total Deposited</p>
-                    <p className="text-[#60a5fa] font-black text-sm">{formatUGX(totalDeposited)}</p>
-                    <p className="text-gray-600 text-[10px]">{approvedCount} Approved recharges</p>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <InfoCard
+                      label="Current Balance"
+                      value={formatUGX(user.balance)}
+                      color="#c9a84c"
+                    />
+                    <InfoCard
+                      label="Cumulative Income"
+                      value={formatUGX(user.cumulativeIncome)}
+                      color="#fff"
+                    />
+                    <InfoCard
+                      label="Completed Deposits"
+                      value={formatUGX(depositedAmount)}
+                      detail={`${userDeposits.length} completed recharges`}
+                      color="#60a5fa"
+                    />
+                    <InfoCard
+                      label="Withdrawn"
+                      value={formatUGX(withdrawnAmount)}
+                      detail={`${pendingUserWithdrawals} pending`}
+                      color="#f87171"
+                    />
+                    <InfoCard
+                      label="Active Products"
+                      value={String(activeUserProducts)}
+                      detail={`${expiredUserProducts} expired • ${userProducts.length} total`}
+                      color="#4ade80"
+                    />
+                    <InfoCard
+                      label="Referral Earnings"
+                      value={formatUGX(referralTotal)}
+                      detail="Across all levels"
+                      color="#f472b6"
+                    />
+                    <InfoCard
+                      label="7-Day Earnings"
+                      value={formatUGX(sevenDayEarnings)}
+                      color="#2dd4bf"
+                    />
                   </div>
-                  <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-                    <p className="text-gray-500 text-[10px]">Total Withdrawn</p>
-                    <p className="text-[#f87171] font-bold text-sm">{formatUGX(totalWithdrawn)}</p>
-                    <p className="text-gray-600 text-[10px]">{pendingWithdraw} pending</p>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-                    <p className="text-gray-500 text-[10px]">Active Products</p>
-                    <p className="text-[#4ade80] font-black text-lg">{activeProds}</p>
-                    <p className="text-gray-600 text-[10px]">{expiredProds} expired • {totalProds} total • From {userProds.filter((p:any)=>p.source==='SUPABASE').length} devices</p>
-                  </div>
-                  <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-                    <p className="text-gray-500 text-[10px]">Referral Earnings</p>
-                    <p className="text-[#f472b6] font-black text-sm">{formatUGX(referralTotal)}</p>
-                    <p className="text-gray-600 text-[10px]">Across all 3 levels</p>
-                  </div>
-                </div>
-
-                <div className="rounded-xl p-3 mb-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-                  <p className="text-gray-500 text-[10px]">7-Day Earnings</p>
-                  <p className="text-[#2dd4bf] font-black text-sm">{formatUGX(sevenDay)}</p>
-                </div>
-
-                <div className="rounded-xl p-3 mb-3" style={{ background: 'linear-gradient(135deg, #1a1100, #0f0f0f)', border: '1px solid rgba(201,168,76,0.3)' }}>
-                  <p className="text-[#c9a84c] font-black text-xs mb-2">👥 Team Referral (Cross-Device)</p>
-                  <div className="grid grid-cols-3 gap-2 mb-2">
-                    <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(37,99,235,0.15)' }}>
-                      <p className="text-[#60a5fa] font-black text-sm">{team.level1.length}</p>
-                      <p className="text-gray-400 text-[9px]">Level 1 (27%)</p>
-                      <p className="text-[#c9a84c] font-bold text-[10px]">{formatUGX(commissions.level1)}</p>
+                  <div
+                    className="rounded-xl p-3 mb-3"
+                    style={{
+                      background: 'linear-gradient(135deg, #1a1100, #0f0f0f)',
+                      border: '1px solid rgba(201,168,76,0.3)',
+                    }}
+                  >
+                    <p className="text-[#c9a84c] font-black text-xs mb-2">
+                      Team Referral
+                    </p>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div>
+                        <p className="text-[#60a5fa] font-black">
+                          {team.level1.length}
+                        </p>
+                        <p className="text-gray-400 text-[9px]">Level 1</p>
+                        <p className="text-[#c9a84c] text-[10px]">
+                          {formatUGX(commissions.level1)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[#4ade80] font-black">
+                          {team.level2.length}
+                        </p>
+                        <p className="text-gray-400 text-[9px]">Level 2</p>
+                        <p className="text-[#c9a84c] text-[10px]">
+                          {formatUGX(commissions.level2)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[#fb923c] font-black">
+                          {team.level3.length}
+                        </p>
+                        <p className="text-gray-400 text-[9px]">Level 3</p>
+                        <p className="text-[#c9a84c] text-[10px]">
+                          {formatUGX(commissions.level3)}
+                        </p>
+                      </div>
                     </div>
-                    <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(22,163,74,0.15)' }}>
-                      <p className="text-[#4ade80] font-black text-sm">{team.level2.length}</p>
-                      <p className="text-gray-400 text-[9px]">Level 2 (2%)</p>
-                      <p className="text-[#c9a84c] font-bold text-[10px]">{formatUGX(commissions.level2)}</p>
-                    </div>
-                    <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(217,119,6,0.15)' }}>
-                      <p className="text-[#fb923c] font-black text-sm">{team.level3.length}</p>
-                      <p className="text-gray-400 text-[9px]">Level 3 (1%)</p>
-                      <p className="text-[#c9a84c] font-bold text-[10px]">{formatUGX(commissions.level3)}</p>
-                    </div>
+                    <p className="text-gray-500 text-[10px] mt-2">
+                      {team.level1.length + team.level2.length + team.level3.length}{' '}
+                      team members
+                    </p>
                   </div>
-                  <div className="flex justify-between text-[10px] text-gray-500">
-                    <span>Total Team: {team.level1.length+team.level2.length+team.level3.length} users from all devices</span>
-                    <span className="text-[#c9a84c] font-bold">{formatUGX(referralTotal)}</span>
-                  </div>
-                  {team.level1.length>0 && (
-                    <div className="mt-2"><p className="text-gray-600 text-[9px] mb-1">Level 1 Members (All devices):</p><div className="flex flex-wrap gap-1">{team.level1.slice(0,5).map((m:any)=><span key={m.id} className="text-[9px] px-2 py-0.5 rounded-full" style={{ background: '#1e1e1e', color: '#c9a84c' }}>{m.phone}</span>)}{team.level1.length>5 && <span className="text-[9px] text-gray-500">+{team.level1.length-5} more</span>}</div></div>
-                  )}
-                </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <button onClick={()=>handleAddBalance(user,false)} className="py-3 rounded-xl text-[13px] font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>+ Add Balance</button>
-                  <button onClick={()=>handleAddBalance(user,true)} className="py-3 rounded-xl text-[13px] font-bold text-gray-300" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>- Deduct</button>
-                  <button onClick={()=>{ if(confirm(`Block ${user.phone}?`)){ updateUser(user.id,{isBlocked:!(user as any).isBlocked}as any); toast.success('Blocked'); setRefresh(r=>r+1); } }} className="py-3 rounded-xl text-[13px] font-bold" style={{background:'rgba(239,68,68,0.15)',color:'#ef4444'}}>Block</button>
-                </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleAddBalance(user, false)}
+                      className="py-3 rounded-xl text-xs font-black text-black"
+                      style={{
+                        background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+                      }}
+                    >
+                      + Add Balance
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAddBalance(user, true)}
+                      className="py-3 rounded-xl text-xs font-bold text-gray-300"
+                      style={{
+                        background: '#1e1e1e',
+                        border: '1px solid #2a2a2a',
+                      }}
+                    >
+                      − Deduct
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleBlockUser(user)}
+                      className="py-3 rounded-xl text-xs font-bold text-red-400"
+                      style={{ background: 'rgba(239,68,68,0.15)' }}
+                    >
+                      {user.isBlocked ? 'Unblock' : 'Block'}
+                    </button>
+                  </div>
+                </section>
+              );
+            })}
+
+            {filteredUsers.length === 0 && (
+              <div
+                className="rounded-2xl p-10 text-center"
+                style={{ background: '#111', border: '1px dashed #333' }}
+              >
+                <p className="text-gray-400 text-sm">No matching users found.</p>
               </div>
-            );})}
-            {users.length===0&&<div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}><p className="text-gray-400 text-sm">No users - Users from different devices will appear here once they register (saves to Supabase platform_users)</p></div>}
+            )}
           </div>
         )}
-        {tab==='recharge'&&<div className="space-y-3"><button onClick={()=>loadAllFromSupabase()} className="w-full py-2 rounded-xl text-xs text-[#c9a84c]" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.2)' }}>🔄 Refresh Recharges From All Devices ({supaRecharge.length} pending, {supaAll.length} total)</button>{[...supaRecharge.map((o:any)=>({id:o.id, amount:o.amount, paymentMethod:o.payment_method||'MTN', phoneNumber:o.phone_number||'', status:o.status, userId:o.user_id, createdAt:o.submitted_at, source:'SUPABASE'})), ...rechargeOrdersLocal.map(o=>({...o, source:'LOCAL'}))].map(order=>{const user=users.find(u=>u.id===order.userId || u.phone.includes(order.phoneNumber?.slice(-9)||''));return(<div key={order.id+order.source} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><div className="flex justify-between mb-2"><div><p className="text-white font-bold">{formatUGX(order.amount)} • {order.source}</p><p className="text-gray-400 text-xs">{user?.phone||order.userId?.slice(0,8)} • {order.paymentMethod} • {order.phoneNumber}</p></div><span className="text-[10px] px-2 py-1 rounded-full" style={getStatusStyle(order.status)}>{order.status}</span></div>{order.status==='pending'&&<div className="grid grid-cols-2 gap-2"><button onClick={async()=>{ await supabase.from('investment_packages').update({status:'completed'}).eq('id',order.id); toast.success('Approved + Credited cross-device'); setRefresh(r=>r+1); loadAllFromSupabase(); }} className="py-2.5 rounded-xl text-xs font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>Approve</button><button onClick={async()=>{ await supabase.from('investment_packages').update({status:'rejected'}).eq('id',order.id); toast.success('Rejected'); setRefresh(r=>r+1); }} className="py-2.5 rounded-xl text-xs font-bold text-red-400" style={{ background: 'rgba(239,68,68,0.1)' }}>Reject</button></div>}</div>);})}</div>}
-        {tab==='withdraw'&&<div className="space-y-3"><button onClick={()=>loadAllFromSupabase()} className="w-full py-2 rounded-xl text-xs text-[#c9a84c]" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.2)' }}>🔄 Refresh Withdraws From All Devices ({withdrawOrders.length})</button>{withdrawOrders.map(order=>{const user=users.find(u=>u.id===order.userId || u.phone===order.phoneNumber);return(<div key={order.id} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><div className="flex justify-between mb-2"><div><p className="text-white font-bold">{formatUGX(order.amount)} • {order.source}</p><p className="text-gray-400 text-xs">{user?.phone||order.userId} • {order.phoneNumber}</p></div><span className="text-[10px] px-2 py-1 rounded-full" style={getStatusStyle(order.status)}>{order.status}</span></div>{order.status==='pending'&&<div className="grid grid-cols-2 gap-2"><button onClick={async()=>{ try{ await supabase.from('withdraw_orders').update({status:'completed'}).eq('id',order.id); }catch{} approveWithdrawOrder(order.id); toast.success('Approved'); setRefresh(r=>r+1); }} className="py-2.5 rounded-xl text-xs font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>Approve</button><button onClick={async()=>{ try{ await supabase.from('withdraw_orders').update({status:'rejected'}).eq('id',order.id); }catch{} rejectWithdrawOrder(order.id); toast.success('Rejected'); setRefresh(r=>r+1); }} className="py-2.5 rounded-xl text-xs font-bold text-red-400" style={{ background: 'rgba(239,68,68,0.1)' }}>Reject</button></div>}</div>);})}{withdrawOrders.length===0&&<div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}><p className="text-gray-400 text-sm">No withdraws - From all devices will appear here</p></div>}</div>}
-        {tab==='products'&&<div className="space-y-3"><button onClick={()=>loadAllFromSupabase()} className="w-full py-2 rounded-xl text-xs text-[#c9a84c]" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.2)' }}>🔄 Refresh Products From All Devices ({allUserProducts.length} purchases)</button>{PRODUCTS.map(product=>{const purchases=allUserProducts.filter(p=>p.productId===product.id || p.product_id===product.id);const supaCount=purchases.filter((p:any)=>p.source==='SUPABASE').length;return<div key={product.id} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><div className="flex justify-between"><div><p className="text-white font-semibold text-sm">VIP{product.vip} {product.name}</p><p className="text-[#c9a84c] font-bold">{formatUGX(product.price)} • Daily {formatUGX(product.dailyIncome)}</p><p className="text-gray-500 text-[10px]">{purchases.length} bought • {supaCount} from other devices • {purchases.filter(p=>p.status==='active').length} active</p></div><p className="text-white font-black text-xl">{purchases.length}</p></div>{purchases.slice(0,3).map((p:any)=><p key={p.id} className="text-gray-600 text-[10px] mt-1">• {users.find(u=>u.id===p.userId)?.phone||p.userId?.slice(0,8)} - {new Date(p.purchaseDate||p.purchase_date).toLocaleDateString()} - {p.source}</p>)}</div>;})}</div>}
-        {tab==='gifts'&&<div className="space-y-3"><div className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid rgba(201,168,76,0.3)' }}><p className="text-white font-bold text-sm mb-3">Create Redeem Code (All devices can redeem)</p><button onClick={()=>{const amt=parseInt(prompt('Amount UGX:')||'0');if(amt>0){const exp=new Date(Date.now()+30*60*1000).toISOString();createGiftCode(amt,undefined,exp);toast.success('Created');setRefresh(r=>r+1);}}} className="w-full py-3 rounded-xl font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>+ Create Redeem Code</button></div>{getGiftCodes().map(gc=><div key={gc.id} className="rounded-xl p-3 flex justify-between" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><div><p className="text-[#c9a84c] font-black text-sm">{gc.code}</p><p className="text-white text-xs">{formatUGX(gc.amount)} {gc.usedBy?'• USED':''}</p></div><button onClick={()=>{deleteGiftCode(gc.id);toast.success('Deleted');setRefresh(r=>r+1);}} className="w-6 h-6 rounded flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.1)' }}><Trash2 size={12} className="text-red-400"/></button></div>)}</div>}
-        {tab==='resets'&&<div className="space-y-3">{getPasswordResets().map((req:PasswordResetRequest)=><div key={req.id} className="rounded-2xl p-4" style={{ background: '#111111', border: '1px solid #2a2a2a' }}><div className="flex justify-between mb-2"><p className="text-white font-bold text-sm">{req.phone}</p><span className="text-[10px] px-2 py-1 rounded-full" style={getStatusStyle(req.status)}>{req.status}</span></div>{req.status==='pending'&&<div className="grid grid-cols-2 gap-2"><button onClick={()=>{approvePasswordReset(req.id);toast.success('Approved');setRefresh(r=>r+1);}} className="py-2 rounded-xl text-xs font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>Approve</button><button onClick={()=>{rejectPasswordReset(req.id);toast.success('Rejected');setRefresh(r=>r+1);}} className="py-2 rounded-xl text-xs font-bold text-red-400" style={{ background: 'rgba(239,68,68,0.1)' }}>Reject</button></div>}</div>)}</div>}
-      </div>
+
+        {tab === 'recharge' && (
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => void loadAllFromSupabase()}
+              className="w-full py-2 rounded-xl text-xs text-[#c9a84c]"
+              style={{
+                background: '#111',
+                border: '1px solid rgba(201,168,76,0.2)',
+              }}
+            >
+              Refresh recharge records ({pendingRechargeCount} pending •{' '}
+              {rechargeOrders.length} total)
+            </button>
+
+            {rechargeOrders.map(order => {
+              const status = getRechargeStatusStyle(order.status);
+
+              return (
+                <div
+                  key={order.id}
+                  className="rounded-2xl p-4"
+                  style={{ background: '#111', border: '1px solid #2a2a2a' }}
+                >
+                  <div className="flex justify-between gap-3">
+                    <div>
+                      <p className="text-white font-bold">
+                        {formatUGX(Number(order.amount || 0))}
+                      </p>
+                      <p className="text-gray-400 text-xs mt-1">
+                        {order.phone_number || 'No phone'} •{' '}
+                        {order.payment_method || 'PesaJet'}
+                      </p>
+                      <p className="text-gray-500 text-[10px] mt-1 break-all">
+                        Ref: {order.id}
+                      </p>
+                    </div>
+                    <span
+                      className="h-fit px-2 py-1 rounded-full text-[10px] font-black"
+                      style={{
+                        color: status.color,
+                        background: status.background,
+                      }}
+                    >
+                      {status.label}
+                    </span>
+                  </div>
+                  <p className="text-gray-600 text-[10px] mt-3">
+                    {formatDate(order.submitted_at || order.created_at)}
+                  </p>
+                </div>
+              );
+            })}
+
+            {rechargeOrders.length === 0 && !loading && (
+              <div
+                className="rounded-2xl p-10 text-center"
+                style={{ background: '#111', border: '1px dashed #333' }}
+              >
+                <p className="text-gray-400 text-sm">No recharge records found.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'withdraw' && (
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => void loadAllFromSupabase()}
+              className="w-full py-2 rounded-xl text-xs text-[#c9a84c]"
+              style={{
+                background: '#111',
+                border: '1px solid rgba(201,168,76,0.2)',
+              }}
+            >
+              Refresh withdrawals ({withdrawOrders.length})
+            </button>
+
+            {withdrawOrders.map(order => {
+              const user = users.find(
+                item =>
+                  item.id === order.userId ||
+                  item.phone === order.phoneNumber
+              );
+
+              return (
+                <div
+                  key={`${order.source}-${order.id}`}
+                  className="rounded-2xl p-4"
+                  style={{ background: '#111', border: '1px solid #2a2a2a' }}
+                >
+                  <div className="flex justify-between gap-3">
+                    <div>
+                      <p className="text-white font-bold">
+                        {formatUGX(order.amount)} • {order.source}
+                      </p>
+                      <p className="text-gray-400 text-xs mt-1">
+                        {user?.phone || order.userId || 'Unknown user'} •{' '}
+                        {order.phoneNumber || 'No phone'}
+                      </p>
+                    </div>
+                    <span
+                      className="h-fit px-2 py-1 rounded-full text-[10px]"
+                      style={getGeneralStatusStyle(order.status)}
+                    >
+                      {order.status}
+                    </span>
+                  </div>
+
+                  {order.status === 'pending' && (
+                    <div className="grid grid-cols-2 gap-2 mt-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleWithdrawalDecision(order, 'approve')
+                        }
+                        className="py-2.5 rounded-xl text-xs font-black text-black"
+                        style={{
+                          background:
+                            'linear-gradient(135deg, #c9a84c, #f0c040)',
+                        }}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleWithdrawalDecision(order, 'reject')
+                        }
+                        className="py-2.5 rounded-xl text-xs font-bold text-red-400"
+                        style={{ background: 'rgba(239,68,68,0.1)' }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {withdrawOrders.length === 0 && (
+              <div
+                className="rounded-2xl p-10 text-center"
+                style={{ background: '#111', border: '1px dashed #333' }}
+              >
+                <p className="text-gray-400 text-sm">No withdrawals found.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'products' && (
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => void loadAllFromSupabase()}
+              className="w-full py-2 rounded-xl text-xs text-[#c9a84c]"
+              style={{
+                background: '#111',
+                border: '1px solid rgba(201,168,76,0.2)',
+              }}
+            >
+              Refresh products ({allUserProducts.length} purchases)
+            </button>
+
+            {PRODUCTS.map(product => {
+              const purchases = allUserProducts.filter(
+                item =>
+                  item.productId === product.id ||
+                  item.product_id === product.id
+              );
+
+              return (
+                <div
+                  key={product.id}
+                  className="rounded-2xl p-4"
+                  style={{ background: '#111', border: '1px solid #2a2a2a' }}
+                >
+                  <div className="flex justify-between gap-3">
+                    <div>
+                      <p className="text-white font-semibold text-sm">
+                        VIP{product.vip} {product.name}
+                      </p>
+                      <p className="text-[#c9a84c] font-bold">
+                        {formatUGX(product.price)} • Daily{' '}
+                        {formatUGX(product.dailyIncome)}
+                      </p>
+                      <p className="text-gray-500 text-[10px]">
+                        {purchases.length} purchases •{' '}
+                        {
+                          purchases.filter(
+                            item =>
+                              String(item.status).toLowerCase() === 'active'
+                          ).length
+                        }{' '}
+                        active
+                      </p>
+                    </div>
+                    <p className="text-white font-black text-xl">
+                      {purchases.length}
+                    </p>
+                  </div>
+
+                  {purchases.slice(0, 3).map((purchase: any) => (
+                    <p
+                      key={`${purchase.source}-${purchase.id}`}
+                      className="text-gray-600 text-[10px] mt-2"
+                    >
+                      •{' '}
+                      {users.find(user => user.id === purchase.userId)?.phone ||
+                        String(purchase.userId || '').slice(0, 8)}{' '}
+                      — {formatDate(purchase.purchaseDate)} — {purchase.source}
+                    </p>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {tab === 'gifts' && (
+          <div className="space-y-3">
+            <div
+              className="rounded-2xl p-4"
+              style={{
+                background: '#111',
+                border: '1px solid rgba(201,168,76,0.3)',
+              }}
+            >
+              <p className="text-white font-bold text-sm mb-3">
+                Create Redeem Code
+              </p>
+              <button
+                type="button"
+                onClick={handleCreateGiftCode}
+                className="w-full py-3 rounded-xl font-black text-black"
+                style={{
+                  background: 'linear-gradient(135deg, #c9a84c, #f0c040)',
+                }}
+              >
+                + Create Redeem Code
+              </button>
+            </div>
+
+            {getGiftCodes().map((giftCode: any) => (
+              <div
+                key={giftCode.id}
+                className="rounded-xl p-3 flex justify-between items-center"
+                style={{ background: '#111', border: '1px solid #2a2a2a' }}
+              >
+                <div>
+                  <p className="text-[#c9a84c] font-black text-sm">
+                    {giftCode.code}
+                  </p>
+                  <p className="text-white text-xs">
+                    {formatUGX(giftCode.amount)}
+                    {giftCode.usedBy ? ' • USED' : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Delete redeem code ${giftCode.code}`}
+                  onClick={() => {
+                    if (!window.confirm(`Delete code ${giftCode.code}?`)) return;
+                    deleteGiftCode(giftCode.id);
+                    toast.success('Redeem code deleted.');
+                    setRefresh(value => value + 1);
+                  }}
+                  className="w-8 h-8 rounded flex items-center justify-center"
+                  style={{ background: 'rgba(239,68,68,0.1)' }}
+                >
+                  <Trash2 size={14} className="text-red-400" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === 'resets' && (
+          <div className="space-y-3">
+            {passwordResets.map((request: PasswordResetRequest) => (
+              <div
+                key={request.id}
+                className="rounded-2xl p-4"
+                style={{ background: '#111', border: '1px solid #2a2a2a' }}
+              >
+                <div className="flex justify-between mb-2">
+                  <p className="text-white font-bold text-sm">{request.phone}</p>
+                  <span
+                    className="px-2 py-1 rounded-full text-[10px]"
+                    style={getGeneralStatusStyle(request.status)}
+                  >
+                    {request.status}
+                  </span>
+                </div>
+
+                {request.status === 'pending' && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        approvePasswordReset(request.id);
+                        toast.success('Password reset approved.');
+                        setRefresh(value => value + 1);
+                      }}
+                      className="py-2 rounded-xl text-xs font-black text-black"
+                      style={{
+                        background:
+                          'linear-gradient(135deg, #c9a84c, #f0c040)',
+                      }}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        rejectPasswordReset(request.id);
+                        toast.success('Password reset rejected.');
+                        setRefresh(value => value + 1);
+                      }}
+                      className="py-2 rounded-xl text-xs font-bold text-red-400"
+                      style={{ background: 'rgba(239,68,68,0.1)' }}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {passwordResets.length === 0 && (
+              <div
+                className="rounded-2xl p-10 text-center"
+                style={{ background: '#111', border: '1px dashed #333' }}
+              >
+                <p className="text-gray-400 text-sm">No password reset requests.</p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
-      }
- 
+}
+
+function StatCard({
+  icon,
+  iconBg,
+  label,
+  value,
+  valueColor,
+}: {
+  icon: React.ReactNode;
+  iconBg: string;
+  label: string;
+  value: string;
+  valueColor: string;
+}) {
+  return (
+    <div
+      className="rounded-2xl p-4"
+      style={{ background: '#111827', border: '1px solid #1f2937' }}
+    >
+      <div
+        className="w-10 h-10 rounded-xl flex items-center justify-center mb-3"
+        style={{ background: iconBg }}
+      >
+        {icon}
+      </div>
+      <p className="text-gray-400 text-[12px]">{label}</p>
+      <p className="font-black text-sm mt-1" style={{ color: valueColor }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function InfoCard({
+  label,
+  value,
+  detail,
+  color,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  color: string;
+}) {
+  return (
+    <div
+      className="rounded-xl p-3"
+      style={{ background: '#0f1419', border: '1px solid #1e293b' }}
+    >
+      <p className="text-gray-500 text-[10px] uppercase">{label}</p>
+      <p className="font-black text-sm mt-1" style={{ color }}>
+        {value}
+      </p>
+      {detail && <p className="text-gray-600 text-[10px] mt-1">{detail}</p>}
+    </div>
+  );
+  }
