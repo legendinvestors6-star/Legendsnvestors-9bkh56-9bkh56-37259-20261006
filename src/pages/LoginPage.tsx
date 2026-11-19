@@ -1,198 +1,205 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 
-const ADMIN_PHONE = '0746085840';
-const ADMIN_PASSWORD = 'milly@2323';
+type Mode = 'login' | 'forgot' | 'resetOtp' | 'setNewPassword';
+
+function toUgandaE164(input: string): string {
+  const digits = input.replace(/\D/g, '');
+
+  let nationalNumber: string;
+
+  if (digits.startsWith('256')) {
+    nationalNumber = digits.slice(3);
+  } else if (digits.startsWith('0')) {
+    nationalNumber = digits.slice(1);
+  } else {
+    nationalNumber = digits;
+  }
+
+  if (!/^\d{9}$/.test(nationalNumber)) {
+    throw new Error('Enter a valid Ugandan number, such as 0751234567.');
+  }
+
+  return `+256${nationalNumber}`;
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<'login' | 'forgot' | 'status'>('login');
-  const [identifier, setIdentifier] = useState('');
+
+  const [mode, setMode] = useState<Mode>('login');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
   const [resetPhone, setResetPhone] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [confirmPw, setConfirmPw] = useState('');
-  const [statusPhone, setStatusPhone] = useState('');
-  const [statusResult, setStatusResult] = useState<any>(null);
+  const [resetOtp, setResetOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const handleLogin = async () => {
-    if (!identifier.trim() || !password) {
-      toast.error('Fill all fields');
+    let phoneE164: string;
+
+    try {
+      phoneE164 = toUgandaE164(phone);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Enter a valid phone number'
+      );
       return;
     }
+
+    if (!password) {
+      toast.error('Enter your password');
+      return;
+    }
+
     setLoading(true);
-    const cleanPhone = identifier.trim();
-    
+
     try {
-      // 1. ADMIN HARDCODED - Works always
-      if (cleanPhone === ADMIN_PHONE && password === ADMIN_PASSWORD) {
-        const adminUser = {
-          id: 'admin001',
-          phone: ADMIN_PHONE,
-          balance: 0,
-          isAdmin: true,
-          is_admin: true,
-          referral_code: 'ADMIN000'
-        };
-        localStorage.setItem('legend_user', JSON.stringify(adminUser));
-        localStorage.setItem('legend_current_user', 'admin001');
-        localStorage.setItem('phone', ADMIN_PHONE);
-        localStorage.setItem('user_id', 'admin001');
-        localStorage.setItem('user', JSON.stringify(adminUser));
-        localStorage.setItem('isLoggedIn', 'true');
-        toast.success('Admin login successful');
-        navigate('/admin');
+      const { data, error } = await supabase.auth.signInWithPassword({
+        phone: phoneE164,
+        password,
+      });
+
+      if (error) throw error;
+      if (!data.user) throw new Error('Login did not return a user.');
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('is_admin, is_banned')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError) {
+        await supabase.auth.signOut();
+        throw new Error(`Could not load your profile: ${profileError.message}`);
+      }
+
+      if (profile.is_banned) {
+        await supabase.auth.signOut();
+        toast.error('Account is restricted. Contact support.');
         return;
       }
 
-      // 2. CHECK SUPABASE users TABLE - REAL DATABASE
-      let foundUser: any = null;
-
-      const { data: userData } = await supabase
-        .from('users')
-        .select('*')
-        .eq('phone', cleanPhone)
-        .maybeSingle();
-
-      if (userData && userData.password === password) {
-        foundUser = userData;
-      } else {
-        // 3. TRY profiles TABLE (some versions use this)
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('phone', cleanPhone)
-          .maybeSingle();
-        
-        if (profileData && profileData.password === password) {
-          foundUser = profileData;
-        }
-      }
-
-      // 4. TRY localStorage fallback
-      if (!foundUser) {
-        const localUsers = JSON.parse(localStorage.getItem('legend_users') || '[]');
-        const local = localUsers.find((u: any) => u.phone === cleanPhone && u.password === password);
-        if (local) foundUser = local;
-      }
-
-      if (foundUser) {
-        // Check if banned
-        if (foundUser.is_banned) {
-          toast.error('Account is banned. Contact support.');
-          setLoading(false);
-          return;
-        }
-
-        // SAVE SESSION FOR ALL OTHER PAGES
-        const sessionUser = {
-          id: foundUser.id,
-          phone: foundUser.phone,
-          password: foundUser.password,
-          balance: Number(foundUser.balance || 9000),
-          referral_code: foundUser.referral_code || foundUser.referralCode || '',
-          referralCode: foundUser.referral_code || foundUser.referralCode || '',
-          isAdmin: foundUser.is_admin || foundUser.isAdmin || false,
-          created_at: foundUser.created_at,
-          createdAt: foundUser.created_at || foundUser.createdAt
-        };
-
-        localStorage.setItem('legend_user', JSON.stringify(sessionUser));
-        localStorage.setItem('legend_current_user', foundUser.id);
-        localStorage.setItem('phone', foundUser.phone);
-        localStorage.setItem('user_id', foundUser.id);
-        localStorage.setItem('user', JSON.stringify(sessionUser));
-        localStorage.setItem('isLoggedIn', 'true');
-
-        // Also save to legend_users for backward compatibility
-        try {
-          const users = JSON.parse(localStorage.getItem('legend_users') || '[]');
-          if (!users.find((u: any) => u.id === foundUser.id)) {
-            users.push(sessionUser);
-            localStorage.setItem('legend_users', JSON.stringify(users));
-          }
-        } catch {}
-
-        toast.success('Login successful');
-        navigate(sessionUser.isAdmin ? '/admin' : '/home');
-      } else {
-        toast.error('Incorrect phone number or password');
-      }
-    } catch (error: any) {
-      console.error(error);
-      toast.error(error?.message || 'Login failed - check internet');
+      toast.success('Login successful');
+      navigate(profile.is_admin ? '/admin' : '/home');
+    } catch (error) {
+      console.error('Login failed:', error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Login failed. Check your phone number and password.'
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const handleReset = async () => {
-    if (!resetPhone.trim() || newPw.length < 6) {
-      toast.error('Enter phone and password min 6 chars');
-      return;
-    }
-    if (newPw !== confirmPw) {
-      toast.error('Passwords do not match');
-      return;
-    }
+  const handleSendResetCode = async () => {
+    let phoneE164: string;
+
     try {
-      // Save to Supabase so admin sees it!
-      const { error } = await supabase.from('password_resets').insert({
-        id: Math.random().toString(36).slice(2, 11) + Date.now().toString(36),
-        phone: resetPhone.trim(),
-        new_password: newPw,
-        newPassword: newPw,
-        status: 'pending',
-        created_at: new Date().toISOString()
+      phoneE164 = toUgandaE164(resetPhone);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Enter a valid phone number'
+      );
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: phoneE164,
+        options: {
+          shouldCreateUser: false,
+        },
       });
 
-      // Also local fallback
-      try {
-        const local = JSON.parse(localStorage.getItem('legend_password_resets') || '[]');
-        local.unshift({
-          id: Math.random().toString(36).slice(2, 11),
-          phone: resetPhone.trim(),
-          newPassword: newPw,
-          status: 'pending',
-          createdAt: new Date().toISOString()
-        });
-        localStorage.setItem('legend_password_resets', JSON.stringify(local));
-      } catch {}
+      if (error) throw error;
 
-      if (error) {
-        console.log(error);
-        // Still show success if table doesn't exist - saved locally
-      }
-
-      toast.success('Request submitted - wait for admin approval');
-      setStatusPhone(resetPhone.trim());
-      
-      // Check status
-      const { data } = await supabase.from('password_resets').select('*').eq('phone', resetPhone.trim()).order('created_at', { ascending: false }).limit(1).maybeSingle();
-      setStatusResult(data);
-      setMode('status');
-    } catch (error: any) {
-      toast.error(error?.message || 'Reset failed');
+      setResetPhone(phoneE164);
+      setMode('resetOtp');
+      toast.success('If the account is eligible, an SMS code has been sent.');
+    } catch (error) {
+      console.error('Could not send reset code:', error);
+      toast.error('Could not send a reset code. Check the number and try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const checkStatus = async () => {
+  const handleVerifyResetCode = async () => {
+    const cleanOtp = resetOtp.trim();
+
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      toast.error('Enter the 6-digit SMS code');
+      return;
+    }
+
+    setLoading(true);
+
     try {
-      const { data } = await supabase.from('password_resets').select('*').eq('phone', statusPhone.trim()).order('created_at', { ascending: false }).limit(1).maybeSingle();
-      if (data) {
-        setStatusResult(data);
-      } else {
-        // Try local
-        const local = JSON.parse(localStorage.getItem('legend_password_resets') || '[]');
-        const found = local.find((r: any) => r.phone === statusPhone.trim());
-        setStatusResult(found);
-        if (!found) toast.error('No request found');
-      }
-    } catch (error: any) {
-      toast.error(error?.message || 'Could not fetch status');
+      const { error } = await supabase.auth.verifyOtp({
+        phone: resetPhone,
+        token: cleanOtp,
+        type: 'sms',
+      });
+
+      if (error) throw error;
+
+      setResetOtp('');
+      setMode('setNewPassword');
+      toast.success('Phone verified. Choose a new password.');
+    } catch (error) {
+      console.error('Reset-code verification failed:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Could not verify the code'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSetNewPassword = async () => {
+    if (newPassword.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      toast.error('Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) throw error;
+
+      await supabase.auth.signOut();
+
+      setPhone(resetPhone);
+      setPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setMode('login');
+
+      toast.success('Password changed. Please sign in.');
+    } catch (error) {
+      console.error('Password update failed:', error);
+      toast.error(
+        error instanceof Error ? error.message : 'Could not change password'
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -206,37 +213,167 @@ export default function LoginPage() {
       <div className="bg-zinc-900 rounded-3xl p-6 max-w-md mx-auto border border-zinc-800">
         {mode === 'login' && (
           <>
-            <h2 className="text-xl font-bold mb-4">Welcome Back</h2>
-            <p className="text-zinc-500 text-sm mb-4">Sign in with name or phone</p>
-            <input value={identifier} onChange={e => setIdentifier(e.target.value)} placeholder="Name or Phone Number" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-2 text-sm outline-none" onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-            <button onClick={() => setMode('forgot')} className="text-yellow-500 text-xs mb-4">Forgot Password?</button>
-            <button onClick={handleLogin} disabled={loading} className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl">{loading ? 'Signing...' : 'Sign In'}</button>
-            <div className="text-center mt-4 text-sm text-zinc-500">No account? <Link to="/register" className="text-yellow-500">Register</Link></div>
+            <h2 className="text-xl font-bold mb-2">Welcome Back</h2>
+            <p className="text-zinc-500 text-sm mb-4">
+              Sign in with your registered phone number
+            </p>
+
+            <input
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder="0751234567 or +256751234567"
+              autoComplete="tel"
+              inputMode="tel"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none"
+            />
+
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-2 text-sm outline-none"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void handleLogin();
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => setMode('forgot')}
+              className="text-yellow-500 text-xs mb-4"
+            >
+              Forgot Password?
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogin}
+              disabled={loading}
+              className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl disabled:opacity-60"
+            >
+              {loading ? 'Signing in...' : 'Sign In'}
+            </button>
+
+            <div className="text-center mt-4 text-sm text-zinc-500">
+              No account?{' '}
+              <Link to="/register" className="text-yellow-500">
+                Register
+              </Link>
+            </div>
           </>
         )}
+
         {mode === 'forgot' && (
           <>
-            <button onClick={() => setMode('login')} className="text-xs text-zinc-500 mb-4">← Back</button>
-            <h2 className="font-bold mb-4">Reset Password</h2>
-            <input value={resetPhone} onChange={e => setResetPhone(e.target.value)} placeholder="Registered Phone" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="New Password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Confirm Password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <button onClick={handleReset} className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl text-sm">Submit</button>
+            <button
+              type="button"
+              onClick={() => setMode('login')}
+              className="text-xs text-zinc-500 mb-4"
+            >
+              ← Back
+            </button>
+
+            <h2 className="font-bold mb-2">Reset Password</h2>
+            <p className="text-zinc-500 text-sm mb-4">
+              We’ll send a verification code to your registered phone.
+            </p>
+
+            <input
+              value={resetPhone}
+              onChange={(event) => setResetPhone(event.target.value)}
+              placeholder="Registered phone number"
+              autoComplete="tel"
+              inputMode="tel"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none"
+            />
+
+            <button
+              type="button"
+              onClick={handleSendResetCode}
+              disabled={loading}
+              className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl text-sm disabled:opacity-60"
+            >
+              {loading ? 'Sending...' : 'Send verification code'}
+            </button>
           </>
         )}
-        {mode === 'status' && (
+
+        {mode === 'resetOtp' && (
           <>
-            <button onClick={() => setMode('forgot')} className="text-xs text-zinc-500 mb-4">← Back</button>
-            <h2 className="font-bold mb-4">Check Status</h2>
-            <div className="flex gap-2 mb-3">
-              <input value={statusPhone} onChange={e => setStatusPhone(e.target.value)} placeholder="Phone" className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 text-sm outline-none" />
-              <button onClick={checkStatus} className="bg-yellow-500 text-black px-4 rounded-xl text-sm font-bold">Check</button>
-            </div>
-            {statusResult && <div className="bg-zinc-800 p-3 rounded-xl text-sm">Status: <b className={statusResult.status === 'approved' ? 'text-green-400' : statusResult.status === 'rejected' ? 'text-red-400' : 'text-yellow-400'}>{statusResult.status}</b><br />Phone: {statusResult.phone}</div>}
+            <button
+              type="button"
+              onClick={() => setMode('forgot')}
+              className="text-xs text-zinc-500 mb-4"
+            >
+              ← Back
+            </button>
+
+            <h2 className="font-bold mb-2">Verify your phone</h2>
+            <p className="text-zinc-500 text-sm mb-4">
+              Enter the 6-digit SMS code sent to {resetPhone}.
+            </p>
+
+            <input
+              value={resetOtp}
+              onChange={(event) =>
+                setResetOtp(event.target.value.replace(/\D/g, '').slice(0, 6))
+              }
+              placeholder="6-digit code"
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              maxLength={6}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none"
+            />
+
+            <button
+              type="button"
+              onClick={handleVerifyResetCode}
+              disabled={loading}
+              className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl text-sm disabled:opacity-60"
+            >
+              {loading ? 'Verifying...' : 'Verify code'}
+            </button>
+          </>
+        )}
+
+        {mode === 'setNewPassword' && (
+          <>
+            <h2 className="font-bold mb-2">Choose a new password</h2>
+            <p className="text-zinc-500 text-sm mb-4">
+              Phone verified: {resetPhone}
+            </p>
+
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="New password (min 6 characters)"
+              autoComplete="new-password"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none"
+            />
+
+            <input
+              type="password"
+              value={confirmNewPassword}
+              onChange={(event) => setConfirmNewPassword(event.target.value)}
+              placeholder="Confirm new password"
+              autoComplete="new-password"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none"
+            />
+
+            <button
+              type="button"
+              onClick={handleSetNewPassword}
+              disabled={loading}
+              className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl text-sm disabled:opacity-60"
+            >
+              {loading ? 'Updating...' : 'Change password'}
+            </button>
           </>
         )}
       </div>
     </div>
   );
-      }
+        }
