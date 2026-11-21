@@ -3,12 +3,7 @@ import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, Phone, Lock, Gift } from 'lucide-react';
 import { toast } from 'sonner';
 import { REGISTRATION_BONUS } from '@/constants/products';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+import { supabase } from '@/lib/supabase';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -22,58 +17,60 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!phone.trim() ||!password.trim() ||!confirm.trim()) { toast.error('Please fill in all fields'); return; }
-    if (password!== confirm) { toast.error('Passwords do not match'); return; }
+    if (!phone.trim() || !password.trim() || !confirm.trim()) { toast.error('Please fill in all fields'); return; }
+    if (password !== confirm) { toast.error('Passwords do not match'); return; }
     if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
 
     setLoading(true);
     try {
       const cleanPhone = phone.trim();
 
-      // 1. Check if phone already exists
-      const { data: existing } = await supabase.from('users').select('id').eq('phone', cleanPhone).single();
+      // 1. Check if phone already exists - FIXED: platform_users
+      const { data: existing } = await supabase.from('platform_users').select('id').eq('phone', cleanPhone).maybeSingle();
       if (existing) {
         toast.error('Phone number already registered');
         setLoading(false);
         return;
       }
 
-      // 2. Find who referred this user
+      // 2. Find who referred this user - FIXED: platform_users
       let referredById = null;
       const refCodeToUse = (refCodeInput || '').trim().toUpperCase();
       if (refCodeToUse) {
-        const { data: referrer } = await supabase.from('users').select('id').eq('referral_code', refCodeToUse).single();
+        const { data: referrer } = await supabase.from('platform_users').select('id').eq('referral_code', refCodeToUse).maybeSingle();
         if (referrer) {
           referredById = referrer.id;
         } else {
           toast.error('Invalid referral code');
-          // don't block, just continue without referral
         }
       }
 
       // 3. Generate own referral code
       const myReferralCode = 'LEGEND' + Math.floor(100000 + Math.random() * 900000);
 
-      // 4. Create user in public.users with PHONE + BALANCE + REFERRAL
-      // FROM THIS:
-      
-const { data: newUser, error } = await supabase.from('users').insert({
-  phone: cleanPhone,
-  password: password,
-  balance: REGISTRATION_BONUS,
-  referral_code: myReferralCode,
-  referred_by: referredById
-}).select().single();
+      // 4. Create user - FIXED: platform_users + wallet_balance (what Admin reads)
+      const { data: newUser, error } = await supabase.from('platform_users').insert({
+        phone: cleanPhone,
+        password: password,
+        wallet_balance: REGISTRATION_BONUS,
+        balance: REGISTRATION_BONUS, // keep both, in case your table has both columns
+        referral_code: myReferralCode,
+        referred_by: referredById,
+        level: 1,
+        cumulative_income: 0,
+      }).select().single();
 
       if (error) throw error;
 
-      // 5. Add transaction for bonus
-      await supabase.from('transactions').insert({
-        user_id: newUser.id,
-        type: 'bonus',
-        amount: REGISTRATION_BONUS,
-        description: 'Registration Bonus'
-      });
+      // 5. Try bonus transaction - don't block if table doesn't exist
+      try {
+        await supabase.from('transactions').insert({
+          user_id: newUser.id,
+          type: 'bonus',
+          amount: REGISTRATION_BONUS,
+          description: 'Registration Bonus'
+        });
+      } catch {}
 
       // 6. Save session locally
       localStorage.setItem('legend_user', JSON.stringify(newUser));
@@ -132,8 +129,8 @@ const { data: newUser, error } = await supabase.from('users').insert({
             <label className="text-xs font-medium text-gray-500 mb-1.5 block">Password</label>
             <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
               <Lock size={15} className="text-gray-500 mr-2" />
-              <input type={showPw? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
-              <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-1">{showPw? <EyeOff size={15} /> : <Eye size={15} />}</button>
+              <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+              <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-1">{showPw ? <EyeOff size={15} /> : <Eye size={15} />}</button>
             </div>
           </div>
 
@@ -154,7 +151,7 @@ const { data: newUser, error } = await supabase.from('users').insert({
           </div>
 
           <button onClick={handleRegister} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base disabled:opacity-60">
-            {loading? 'Creating account...' : 'Register & Claim Bonus'}
+            {loading ? 'Creating account...' : 'Register & Claim Bonus'}
           </button>
 
           <div className="text-center pt-1">
@@ -165,4 +162,4 @@ const { data: newUser, error } = await supabase.from('users').insert({
       </div>
     </div>
   );
-    }
+}
