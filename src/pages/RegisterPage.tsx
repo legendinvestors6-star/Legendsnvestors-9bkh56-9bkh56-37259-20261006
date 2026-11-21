@@ -1,227 +1,168 @@
 import { useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
+import { Eye, EyeOff, Phone, Lock, Gift } from 'lucide-react';
 import { toast } from 'sonner';
-import { supabase } from '@/lib/supabase';
+import { REGISTRATION_BONUS } from '@/constants/products';
+import { createClient } from '@supabase/supabase-js';
 
-function toUgandaE164(input: string): string {
-  const digits = input.replace(/\D/g, '');
-
-  let nationalNumber: string;
-  if (digits.startsWith('256')) {
-    nationalNumber = digits.slice(3);
-  } else if (digits.startsWith('0')) {
-    nationalNumber = digits.slice(1);
-  } else {
-    nationalNumber = digits;
-  }
-
-  if (!/^\d{9}$/.test(nationalNumber)) {
-    throw new Error('Enter a valid Ugandan number, such as 0751234567.');
-  }
-
-  return `+256${nationalNumber}`;
-}
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 export default function RegisterPage() {
   const navigate = useNavigate();
-  const location = useLocation();
-
-  const [fullName, setFullName] = useState('');
+  const [params] = useSearchParams();
+  const initialRef = params.get('ref') || localStorage.getItem('referred_by') || '';
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [referral, setReferral] = useState(() => {
-    const code = new URLSearchParams(location.search).get('ref')?.trim() || '';
-    return code.toLowerCase() === 'null' ? '' : code;
-  });
+  const [confirm, setConfirm] = useState('');
+  const [refCodeInput, setRefCodeInput] = useState(initialRef);
+  const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    const cleanName = fullName.trim();
-    const enteredReferral = referral.trim();
-    const cleanReferral =
-      enteredReferral.toLowerCase() === 'null'
-        ? ''
-        : enteredReferral.toUpperCase();
-
-    if (!cleanName || !phone.trim() || !password) {
-      toast.error('Fill all required fields');
-      return;
-    }
-
-    if (password.length < 6) {
-      toast.error('Password must be at least 6 characters');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      toast.error('Passwords do not match');
-      return;
-    }
-
-    let phoneE164: string;
-    try {
-      phoneE164 = toUgandaE164(phone);
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : 'Enter a valid phone number'
-      );
-      return;
-    }
+    if (!phone.trim() ||!password.trim() ||!confirm.trim()) { toast.error('Please fill in all fields'); return; }
+    if (password!== confirm) { toast.error('Passwords do not match'); return; }
+    if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
 
     setLoading(true);
-
     try {
-      const { data, error } = await supabase.auth.signUp({
-        phone: phoneE164,
-        password,
-        options: {
-          // Treat this as untrusted input. Validate referral codes server-side.
-          data: {
-            full_name: cleanName,
-            referral_code: cleanReferral || null,
-          },
-        },
-      });
+      const cleanPhone = phone.trim();
 
-      if (error) throw error;
-      if (!data.user) throw new Error('Could not create account. Try again.');
-
-      if (!data.session) {
-        toast.error(
-          'Account created, but no active session was returned. Check that phone confirmation is disabled in Supabase Auth.'
-        );
-        navigate('/login');
+      // 1. Check if phone already exists
+      const { data: existing } = await supabase.from('users').select('id').eq('phone', cleanPhone).single();
+      if (existing) {
+        toast.error('Phone number already registered');
+        setLoading(false);
         return;
       }
 
-      toast.success('Account created.');
+      // 2. Find who referred this user
+      let referredById = null;
+      const refCodeToUse = (refCodeInput || '').trim().toUpperCase();
+      if (refCodeToUse) {
+        const { data: referrer } = await supabase.from('users').select('id').eq('referral_code', refCodeToUse).single();
+        if (referrer) {
+          referredById = referrer.id;
+        } else {
+          toast.error('Invalid referral code');
+          // don't block, just continue without referral
+        }
+      }
+
+      // 3. Generate own referral code
+      const myReferralCode = 'LEGEND' + Math.floor(100000 + Math.random() * 900000);
+
+      // 4. Create user in public.users with PHONE + BALANCE + REFERRAL
+      // FROM THIS:
+      
+const { data: newUser, error } = await supabase.from('users').insert({
+  phone: cleanPhone,
+  password: password,
+  balance: REGISTRATION_BONUS,
+  referral_code: myReferralCode,
+  referred_by: referredById
+}).select().single();
+
+      if (error) throw error;
+
+      // 5. Add transaction for bonus
+      await supabase.from('transactions').insert({
+        user_id: newUser.id,
+        type: 'bonus',
+        amount: REGISTRATION_BONUS,
+        description: 'Registration Bonus'
+      });
+
+      // 6. Save session locally
+      localStorage.setItem('legend_user', JSON.stringify(newUser));
+      localStorage.setItem('legend_current_user_id', newUser.id);
+
+      toast.success(`Welcome! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
       navigate('/home');
-    } catch (error) {
-      console.error('Registration failed:', error);
-      toast.error(
-        error instanceof Error ? error.message : 'Registration failed'
-      );
+
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Registration failed');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div
-      className="min-h-screen flex flex-col justify-center px-6 py-8"
-      style={{ background: '#0a0a0a' }}
-    >
-      <div className="text-center mb-6">
-        <h1 className="text-4xl font-black text-white tracking-widest">
-          LEGEND
-        </h1>
-        <p className="text-[#c9a84c] text-[11px] mt-1 tracking-[0.3em]">
-          INVESTORS PLATFORM
-        </p>
+    <div className="app-container min-h-screen" style={{ background: '#0a0a0a' }}>
+      <div className="px-6 pt-14 pb-8 relative overflow-hidden">
+        <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.12) 0%, transparent 70%)' }} />
+        <div className="relative z-10 text-center">
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <div className="flex flex-col gap-1">
+              <div className="w-7 h-1.5 rounded-full gold-gradient" />
+              <div className="w-7 h-1.5 rounded-full gold-gradient" />
+              <div className="w-7 h-1.5 rounded-full gold-gradient" />
+            </div>
+            <h1 className="text-3xl font-black gold-gradient-text">LEGEND</h1>
+          </div>
+          <p className="text-[#c9a84c] text-xs tracking-widest uppercase">Create Your Account</p>
+        </div>
       </div>
 
-      <div
-        className="rounded-3xl p-6"
-        style={{ background: '#151515', border: '1px solid #2a2a2a' }}
-      >
-        <h2 className="text-white font-bold text-lg">Create Account</h2>
-        <p className="text-gray-500 text-xs mb-5">
-          Create a new LEGEND Investors Platform account.
-        </p>
+      <div className="mx-4 mb-4 rounded-2xl p-3 flex items-center gap-3" style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.3)' }}>
+        <div className="w-9 h-9 gold-gradient rounded-xl flex items-center justify-center">
+          <Gift size={18} className="text-black" />
+        </div>
+        <div>
+          <p className="text-white font-bold text-sm">Registration Bonus</p>
+          <p className="text-[#c9a84c] font-black">UGX {REGISTRATION_BONUS.toLocaleString()} immediately credited!</p>
+        </div>
+      </div>
 
-        <div className="space-y-3">
+      <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+        <h2 className="text-xl font-bold text-white mb-5">Create Account</h2>
+        <div className="space-y-4">
           <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">
-              Full Name *
-            </label>
-            <input
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="John Doe"
-              autoComplete="name"
-              className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
-              style={{ background: '#1f1f1f', border: '1px solid #333' }}
-            />
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Phone Number</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <Phone size={15} className="text-gray-500 mr-2" />
+              <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. 0751234567" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+            </div>
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">
-              Phone Number *
-            </label>
-            <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="0751234567 or +256751234567"
-              autoComplete="tel"
-              inputMode="tel"
-              className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
-              style={{ background: '#1f1f1f', border: '1px solid #333' }}
-            />
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Password</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <Lock size={15} className="text-gray-500 mr-2" />
+              <input type={showPw? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+              <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-1">{showPw? <EyeOff size={15} /> : <Eye size={15} />}</button>
+            </div>
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">
-              Password *
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Min 6 characters"
-              autoComplete="new-password"
-              className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
-              style={{ background: '#1f1f1f', border: '1px solid #333' }}
-            />
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Confirm Password</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <Lock size={15} className="text-gray-500 mr-2" />
+              <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Re-enter password" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+            </div>
           </div>
 
           <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">
-              Confirm Password *
-            </label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm password"
-              autoComplete="new-password"
-              className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
-              style={{ background: '#1f1f1f', border: '1px solid #333' }}
-            />
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Referral Code (Optional)</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <Gift size={15} className="text-gray-500 mr-2" />
+              <input type="text" value={refCodeInput} onChange={e => setRefCodeInput(e.target.value.toUpperCase())} placeholder="Enter referral code" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600 uppercase" />
+            </div>
           </div>
 
-          <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">
-              Referral Code (Optional)
-            </label>
-            <input
-              value={referral}
-              onChange={(e) => setReferral(e.target.value)}
-              placeholder="Enter referral code, if you have one"
-              autoComplete="off"
-              className="w-full rounded-xl px-4 py-3.5 text-sm text-white outline-none"
-              style={{ background: '#1f1f1f', border: '1px solid #333' }}
-            />
+          <button onClick={handleRegister} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base disabled:opacity-60">
+            {loading? 'Creating account...' : 'Register & Claim Bonus'}
+          </button>
+
+          <div className="text-center pt-1">
+            <span className="text-gray-600 text-sm">Already have an account? </span>
+            <Link to="/login" className="text-[#c9a84c] font-semibold text-sm">Sign In</Link>
           </div>
         </div>
-
-        <button
-          type="button"
-          onClick={handleRegister}
-          disabled={loading}
-          className="w-full py-4 rounded-xl font-bold text-black text-base mt-6 disabled:opacity-60"
-          style={{ background: '#c9a84c' }}
-        >
-          {loading ? 'Creating Account...' : 'Create Account'}
-        </button>
-
-        <p className="text-center text-gray-500 text-xs mt-4">
-          Already have an account?{' '}
-          <Link to="/login" className="text-[#c9a84c] font-bold">
-            Login
-          </Link>
-        </p>
       </div>
     </div>
   );
-}
+    }
