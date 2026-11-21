@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Eye, EyeOff, Phone, Lock, Gift } from 'lucide-react';
+import { Eye, EyeOff, Phone, Lock, Gift, User } from 'lucide-react';
 import { toast } from 'sonner';
 import { REGISTRATION_BONUS } from '@/constants/products';
 import { supabase } from '@/lib/supabase';
@@ -9,6 +9,7 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const initialRef = params.get('ref') || localStorage.getItem('referred_by') || '';
+  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -17,6 +18,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
+    if (!name.trim()) { toast.error('Please enter your full name'); return; }
     if (!phone.trim() || !password.trim() || !confirm.trim()) { toast.error('Please fill in all fields'); return; }
     if (password !== confirm) { toast.error('Passwords do not match'); return; }
     if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
@@ -25,7 +27,7 @@ export default function RegisterPage() {
     try {
       const cleanPhone = phone.trim();
 
-      // 1. Check if phone already exists - FIXED: platform_users
+      // 1. Check if phone already exists
       const { data: existing } = await supabase.from('platform_users').select('id').eq('phone', cleanPhone).maybeSingle();
       if (existing) {
         toast.error('Phone number already registered');
@@ -33,7 +35,7 @@ export default function RegisterPage() {
         return;
       }
 
-      // 2. Find who referred this user - FIXED: platform_users
+      // 2. Find who referred this user
       let referredById = null;
       const refCodeToUse = (refCodeInput || '').trim().toUpperCase();
       if (refCodeToUse) {
@@ -48,12 +50,14 @@ export default function RegisterPage() {
       // 3. Generate own referral code
       const myReferralCode = 'LEGEND' + Math.floor(100000 + Math.random() * 900000);
 
-      // 4. Create user - FIXED: platform_users + wallet_balance (what Admin reads)
+      // 4. Create user - WITH NAME
       const { data: newUser, error } = await supabase.from('platform_users').insert({
+        name: name.trim(),
+        full_name: name.trim(),
         phone: cleanPhone,
         password: password,
         wallet_balance: REGISTRATION_BONUS,
-        balance: REGISTRATION_BONUS, // keep both, in case your table has both columns
+        balance: REGISTRATION_BONUS,
         referral_code: myReferralCode,
         referred_by: referredById,
         level: 1,
@@ -62,7 +66,6 @@ export default function RegisterPage() {
 
       if (error) throw error;
 
-      // 5. Try bonus transaction - don't block if table doesn't exist
       try {
         await supabase.from('transactions').insert({
           user_id: newUser.id,
@@ -72,11 +75,10 @@ export default function RegisterPage() {
         });
       } catch {}
 
-      // 6. Save session locally
       localStorage.setItem('legend_user', JSON.stringify(newUser));
       localStorage.setItem('legend_current_user_id', newUser.id);
 
-      toast.success(`Welcome! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
+      toast.success(`Welcome ${name.trim()}! You received UGX ${REGISTRATION_BONUS.toLocaleString()} bonus!`);
       navigate('/home');
 
     } catch (err: any) {
@@ -117,6 +119,14 @@ export default function RegisterPage() {
       <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
         <h2 className="text-xl font-bold text-white mb-5">Create Account</h2>
         <div className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-gray-500 mb-1.5 block">Full Name</label>
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+              <User size={15} className="text-gray-500 mr-2" />
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Milly Nakato" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-medium text-gray-500 mb-1.5 block">Phone Number</label>
             <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
@@ -162,4 +172,4 @@ export default function RegisterPage() {
       </div>
     </div>
   );
-}
+        }
