@@ -1,155 +1,252 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import { Eye, EyeOff, Phone, Lock, ArrowLeft, CheckCircle, Clock, XCircle, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 
-type Mode = 'login' | 'forgot' | 'setNewPassword';
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
-function toLocalPhone(input: string): string {
-  const digits = input.replace(/\D/g, '');
-  if (digits.startsWith('256')) return '0' + digits.slice(3);
-  if (digits.startsWith('0')) return digits;
-  return '0' + digits;
-}
-
-function toE164(input: string): string {
-  const digits = input.replace(/\D/g, '');
-  if (digits.startsWith('256')) return '+' + digits;
-  if (digits.startsWith('0')) return '+256' + digits.slice(1);
-  return '+256' + digits;
-}
+type View = 'login' | 'forgot' | 'status';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>('login');
+  const [view, setView] = useState<View>('login');
+
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Forgot
   const [resetPhone, setResetPhone] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [statusPhone, setStatusPhone] = useState('');
+  const [statusResult, setStatusResult] = useState<any>(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
 
   const handleLogin = async () => {
-    if (!phone.trim()) { toast.error('Enter your phone number'); return; }
-    if (!password) { toast.error('Enter your password'); return; }
-
-    const localPhone = toLocalPhone(phone);
-    const e164Phone = toE164(phone);
+    if (!phone.trim() ||!password.trim()) { toast.error('Please fill in all fields'); return; }
     setLoading(true);
-
     try {
-      // Try both formats: 075... and +25675...
+      const cleanPhone = phone.trim();
+
+      // 1. Check in Supabase users table with PHONE + PASSWORD
       const { data: user, error } = await supabase
-        .from('users')
-        .select('*')
-        .or(`phone.eq.${localPhone},phone.eq.${e164Phone}`)
-        .maybeSingle();
+       .from('users')
+       .select('*')
+       .eq('phone', cleanPhone)
+       .eq('password', password)
+       .single();
 
-      if (error) throw error;
-      if (!user) throw new Error('No account found with this phone number. Please register.');
-
-      // Check banned - if column doesn't exist, this will be undefined = not banned
-      if ((user as any).is_banned || (user as any).is_blocked) {
-        toast.error('Account is restricted. Contact support.');
+      if (error ||!user) {
+        // Try without password filter to give better message
+        const { data: exists } = await supabase.from('users').select('id').eq('phone', cleanPhone).single();
+        if (!exists) {
+          toast.error('Phone not registered');
+        } else {
+          toast.error('Wrong password');
+        }
+        setLoading(false);
         return;
       }
 
-      if (user.password !== password) {
-        throw new Error('Wrong password. Try again or use Forgot Password.');
+      // 2. Save session
+      localStorage.setItem('legend_user', JSON.stringify(user));
+      localStorage.setItem('legend_current_user_id', user.id);
+
+      toast.success('Login successful!');
+
+      // 3. Check admin - support both is_admin and isAdmin
+      const isAdmin = user.is_admin === true || user.isAdmin === true || user.phone === '0750000000'; // your admin phone
+      if (isAdmin) {
+        navigate('/admin');
+      } else {
+        navigate('/home');
       }
 
-      localStorage.setItem('current_user', JSON.stringify(user));
-      localStorage.setItem('user_phone', user.phone);
-
-      toast.success('Login successful');
-      // Admin check - your admin phone is 0746085840
-      const isAdmin = user.phone === '0746085840' || user.phone === '+256746085840' || (user as any).is_admin === true;
-      navigate(isAdmin ? '/admin' : '/home');
-    } catch (error) {
-      console.error('Login failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Login failed. Check your phone number and password.');
+    } catch (err: any) {
+      toast.error(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSetNewPassword = async () => {
+  const handleForgotSubmit = async () => {
     if (!resetPhone.trim()) { toast.error('Enter your registered phone number'); return; }
-    if (newPassword.length < 6) { toast.error('Password must be at least 6 characters'); return; }
-    if (newPassword !== confirmNewPassword) { toast.error('Passwords do not match'); return; }
-
-    const localPhone = toLocalPhone(resetPhone);
-    const e164Phone = toE164(resetPhone);
-    setLoading(true);
-
+    if (!newPw || newPw.length < 6) { toast.error('New password must be at least 6 characters'); return; }
+    if (newPw!== confirmPw) { toast.error('Passwords do not match'); return; }
+    setSubmitting(true);
     try {
-      const { data: user } = await supabase
-        .from('users')
-        .select('id')
-        .or(`phone.eq.${localPhone},phone.eq.${e164Phone}`)
-        .maybeSingle();
+      // Check user exists
+      const { data: user } = await supabase.from('users').select('id').eq('phone', resetPhone.trim()).single();
+      if (!user) {
+        toast.error('Phone not registered');
+        setSubmitting(false);
+        return;
+      }
 
-      if (!user) throw new Error('No account found with this phone number.');
-
-      const { error } = await supabase
-        .from('users')
-        .update({ password: newPassword })
-        .eq('id', user.id);
+      // Create reset request in public.password_resets
+      const { error } = await supabase.from('password_resets').insert({
+        phone: resetPhone.trim(),
+        new_password: newPw,
+        status: 'pending'
+      });
 
       if (error) throw error;
 
-      setPhone(resetPhone);
-      setPassword('');
-      setNewPassword('');
-      setConfirmNewPassword('');
-      setMode('login');
-      toast.success('Password changed. Please sign in.');
-    } catch (error) {
-      console.error('Password update failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Could not change password');
+      toast.success('Reset request submitted!');
+      setStatusPhone(resetPhone.trim());
+      setView('status');
+    } catch (e: any) {
+      toast.error(e.message);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
+  const handleCheckStatus = async () => {
+    if (!statusPhone.trim()) { toast.error('Enter your phone number'); return; }
+    setCheckingStatus(true);
+    try {
+      const { data } = await supabase.from('password_resets').select('*').eq('phone', statusPhone.trim()).order('created_at', {ascending: false}).limit(1).single();
+      if (!data) {
+        toast.error('No reset request found');
+        setStatusResult(null);
+      } else {
+        setStatusResult(data);
+      }
+    } finally {
+      setCheckingStatus(false);
+    }
+  };
+
+  const pwStrength = (pwd: string) => {
+    if (!pwd) return null;
+    if (pwd.length < 6) return { label: 'Too short', color: '#ef4444', width: '20%' };
+    if (pwd.length < 8) return { label: 'Weak', color: '#f59e0b', width: '50%' };
+    if (/[A-Z]/.test(pwd) && /[0-9]/.test(pwd)) return { label: 'Strong', color: '#22c55e', width: '100%' };
+    return { label: 'Medium', color: '#c9a84c', width: '70%' };
+  };
+  const strength = pwStrength(newPw);
+
   return (
-    <div className="min-h-screen bg-black text-white p-6 pt-16">
-      <div className="text-center mb-10">
-        <h1 className="text-4xl font-black">LEGEND</h1>
-        <p className="text-yellow-500 text-sm mt-2">Investors Platform</p>
-      </div>
-
-      <div className="bg-zinc-900 rounded-3xl p-6 max-w-md mx-auto border border-zinc-800">
-        {mode === 'login' && (
-          <>
-            <h2 className="text-xl font-bold mb-2">Welcome Back</h2>
-            <p className="text-zinc-500 text-sm mb-4">Sign in with your registered phone number</p>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0751234567 or +256751234567" autoComplete="tel" inputMode="tel" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" autoComplete="current-password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-2 text-sm outline-none" onKeyDown={(e) => { if (e.key === 'Enter') void handleLogin(); }} />
-            <button type="button" onClick={() => setMode('forgot')} className="text-yellow-500 text-xs mb-4">Forgot Password?</button>
-            <button type="button" onClick={handleLogin} disabled={loading} className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl disabled:opacity-60">
-              {loading ? 'Signing in...' : 'Sign In'}
-            </button>
-            <div className="text-center mt-4 text-sm text-zinc-500">
-              No account? <Link to="/register" className="text-yellow-500">Register</Link>
+    <div className="app-container min-h-screen" style={{ background: '#0a0a0a' }}>
+      <div className="px-6 pt-16 pb-10 text-center relative overflow-hidden">
+        <div className="absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(201,168,76,0.15) 0%, transparent 70%)' }} />
+        <div className="relative z-10">
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <div className="flex flex-col gap-1">
+              <div className="w-8 h-1.5 rounded-full gold-gradient" />
+              <div className="w-8 h-1.5 rounded-full gold-gradient" />
+              <div className="w-8 h-1.5 rounded-full gold-gradient" />
             </div>
-          </>
-        )}
-
-        {mode === 'forgot' && (
-          <>
-            <button type="button" onClick={() => setMode('login')} className="text-xs text-zinc-500 mb-4">← Back</button>
-            <h2 className="font-bold mb-2">Reset Password</h2>
-            <p className="text-zinc-500 text-sm mb-4">Enter your registered phone and choose a new password. No SMS needed.</p>
-            <input value={resetPhone} onChange={(e) => setResetPhone(e.target.value)} placeholder="Registered phone number" autoComplete="tel" inputMode="tel" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 6 characters)" autoComplete="new-password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="Confirm new password" autoComplete="new-password" className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-3 mb-3 text-sm outline-none" />
-            <button type="button" onClick={handleSetNewPassword} disabled={loading} className="w-full bg-yellow-500 text-black font-bold py-3.5 rounded-xl text-sm disabled:opacity-60">
-              {loading ? 'Updating...' : 'Change password'}
-            </button>
-          </>
-        )}
+            <h1 className="text-4xl font-black tracking-tight gold-gradient-text">LEGEND</h1>
+          </div>
+          <p className="text-[#c9a84c] text-sm font-semibold tracking-widest uppercase">Investors Platform</p>
+        </div>
       </div>
+
+      {view === 'login' && (
+        <>
+          <div className="mx-4 rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+            <h2 className="text-2xl font-bold text-white mb-1">Welcome Back</h2>
+            <p className="text-gray-500 text-sm mb-6">Sign in to your account</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-gray-400 mb-1.5 block">Phone Number</label>
+                <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                  <Phone size={16} className="text-gray-500 mr-2" />
+                  <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Enter phone number" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600" />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-sm font-medium text-gray-400">Password</label>
+                  <button onClick={() => { setResetPhone(''); setNewPw(''); setConfirmPw(''); setView('forgot'); }} className="text-[#c9a84c] text-xs font-semibold">Forgot Password?</button>
+                </div>
+                <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                  <Lock size={16} className="text-gray-500 mr-2" />
+                  <input type={showPw? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter password" className="flex-1 outline-none text-sm text-white bg-transparent" onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+                  <button onClick={() => setShowPw(!showPw)} className="text-gray-500 ml-2">{showPw? <EyeOff size={16} /> : <Eye size={16} />}</button>
+                </div>
+              </div>
+              <button onClick={handleLogin} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base mt-2 disabled:opacity-60">
+                {loading? 'Signing in...' : 'Sign In'}
+              </button>
+              <div className="text-center pt-1">
+                <span className="text-gray-600 text-sm">Don't have an account? </span>
+                <Link to="/register" className="text-[#c9a84c] font-semibold text-sm">Register Now</Link>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {view === 'forgot' && (
+        <div className="mx-4">
+          <div className="rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+            <button onClick={() => setView('login')} className="flex items-center gap-1.5 text-gray-500 text-xs mb-5"><ArrowLeft size={14} /> Back to login</button>
+            <h2 className="text-white font-bold text-lg mb-5">Reset Password</h2>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-gray-400 mb-1.5 block">Registered Phone Number</label>
+                <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                  <Phone size={16} className="text-gray-500 mr-2" />
+                  <input type="tel" value={resetPhone} onChange={e => setResetPhone(e.target.value)} placeholder="Enter your phone number" className="flex-1 outline-none text-sm text-white bg-transparent" />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-400 mb-1.5 block">New Password</label>
+                <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                  <Lock size={16} className="text-gray-500 mr-2" />
+                  <input type={showNewPw? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="At least 6 characters" className="flex-1 outline-none text-sm text-white bg-transparent" />
+                  <button onClick={() => setShowNewPw(!showNewPw)} className="text-gray-500 ml-2">{showNewPw? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                </div>
+                {strength && <div className="mt-1.5"><div className="h-1 rounded-full overflow-hidden" style={{ background: '#2a2a2a' }}><div className="h-full rounded-full" style={{ width: strength.width, background: strength.color }} /></div><p className="text-[10px] mt-0.5 font-medium" style={{ color: strength.color }}>{strength.label}</p></div>}
+              </div>
+              <div>
+                <label className="text-sm font-medium text-gray-400 mb-1.5 block">Confirm New Password</label>
+                <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                  <Lock size={16} className="text-gray-500 mr-2" />
+                  <input type={showConfirm? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)} placeholder="Re-enter new password" className="flex-1 outline-none text-sm text-white bg-transparent" />
+                  <button onClick={() => setShowConfirm(!showConfirm)} className="text-gray-500 ml-2">{showConfirm? <EyeOff size={15} /> : <Eye size={15} />}</button>
+                </div>
+              </div>
+              <button onClick={handleForgotSubmit} disabled={submitting} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-sm disabled:opacity-60">{submitting? 'Submitting...' : 'Submit Reset Request'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view === 'status' && (
+        <div className="mx-4">
+          <div className="rounded-3xl p-6" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+            <button onClick={() => setView('forgot')} className="flex items-center gap-1.5 text-gray-500 text-xs mb-5"><ArrowLeft size={14} /> Back</button>
+            <h2 className="text-white font-bold text-lg mb-1">Reset Request Status</h2>
+            <div className="flex gap-2 mb-5 mt-4">
+              <div className="flex-1 flex items-center rounded-xl px-3 py-3" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
+                <Phone size={14} className="text-gray-500 mr-2" />
+                <input type="tel" value={statusPhone} onChange={e => { setStatusPhone(e.target.value); setStatusResult(null); }} placeholder="Enter phone number" className="flex-1 outline-none text-sm text-white bg-transparent" />
+              </div>
+              <button onClick={handleCheckStatus} disabled={checkingStatus} className="px-4 rounded-xl font-bold text-black text-sm gold-gradient flex items-center gap-1.5"><RefreshCw size={13} className={checkingStatus? 'animate-spin' : ''} />Check</button>
+            </div>
+            {statusResult && (
+              <div className="rounded-2xl p-4" style={{ background: '#1a1a1a', border: '1px solid #333' }}>
+                <p className="text-white text-sm">Status: <span className="font-bold" style={{color: statusResult.status==='approved'? '#22c55e' : statusResult.status==='rejected'? '#ef4444' : '#f59e0b'}}>{statusResult.status}</span></p>
+                <p className="text-gray-500 text-xs mt-1">Phone: {statusResult.phone}</p>
+                {statusResult.status === 'approved' && <button onClick={() => setView('login')} className="w-full py-3.5 rounded-xl font-bold text-black text-sm gold-gradient mt-3">Go to Login</button>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+                                                                                    }
