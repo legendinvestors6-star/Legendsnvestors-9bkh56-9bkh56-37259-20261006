@@ -597,23 +597,3 @@ function InfoCard({ label, value, detail, color }: { label: string; value: strin
     </div>
   );
   }
-
-function StatCard({ icon, iconBg, label, value, valueColor }: { icon: React.ReactNode; iconBg: string; label: string; value: string; valueColor: string }) {
-  return (
-    <div className="rounded-2xl p-4" style={{ background: '#111827', border: '1px solid #1f2937' }}>
-      <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ background: iconBg }}>{icon}</div>
-      <p className="text-gray-400 text-[12px]">{label}</p>
-      <p className="font-black text-sm mt-1" style={{ color: valueColor }}>{value}</p>
-    </div>
-  );
-}
-
-function InfoCard({ label, value, detail, color }: { label: string; value: string; detail?: string; color: string }) {
-  return (
-    <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-      <p className="text-gray-500 text-[10px] uppercase">{label}</p>
-      <p className="font-black text-sm mt-1" style={{ color }}>{value}</p>
-      {detail && <p className="text-gray-600 text-[10px] mt-1">{detail}</p>}
-    </div>
-  );
-}
