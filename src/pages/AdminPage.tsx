@@ -36,8 +36,11 @@ type AdminTab = 'pesajet' | 'overview' | 'users' | 'recharge' | 'withdraw' | 'pr
 
 type AdminUser = {
   id: string;
+  name?: string | null;
+  full_name?: string | null;
   phone: string;
   balance: number;
+  wallet_balance?: number;
   cumulativeIncome: number;
   level: number;
   referralCode: string;
