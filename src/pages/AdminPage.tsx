@@ -179,14 +179,17 @@ export default function AdminPage() {
 
     const databaseUsers: AdminUser[] = (usersResult.data || []).map((user: any) => ({
       id: String(user.id),
+      name: String(user.name || user.full_name || ''),
+      full_name: String(user.full_name || user.name || ''),
       phone: String(user.phone || user.phone_number || user.mobile || ''),
       balance: Number(user.wallet_balance ?? user.balance ?? 0),
+      wallet_balance: Number(user.wallet_balance ?? user.balance ?? 0),
       cumulativeIncome: Number(user.cumulative_income ?? user.total_earnings ?? 0),
       level: Number(user.level || 1),
       referralCode: String(user.referral_code || user.own_referral_code || String(user.id).slice(0, 6).toUpperCase()),
       referredBy: user.referred_by ?? user.referrer_id ?? user.invited_by ?? user.referrer_code ?? null,
       createdAt: user.created_at || undefined,
-      isAdmin: false,
+      isAdmin: Boolean(user.is_admin || false),
       source: 'SUPABASE',
       isBlocked: Boolean(user.is_blocked || user.is_banned),
     }));
