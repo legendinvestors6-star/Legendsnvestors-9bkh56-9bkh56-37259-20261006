@@ -189,7 +189,7 @@ export default function AdminPage() {
       referralCode: String(user.referral_code || user.own_referral_code || String(user.id).slice(0, 6).toUpperCase()),
       referredBy: user.referred_by ?? user.referrer_id ?? user.invited_by ?? user.referrer_code ?? null,
       createdAt: user.created_at || undefined,
-      isAdmin: Boolean(user.is_admin || false),
+      {user.name || user.full_name || user.phone}
       source: 'SUPABASE',
       isBlocked: Boolean(user.is_blocked || user.is_banned),
     }));
