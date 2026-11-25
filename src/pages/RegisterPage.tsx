@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, Phone, Lock, Gift, User } from 'lucide-react';
 import { toast } from 'sonner';
@@ -8,7 +8,10 @@ import { supabase } from '@/lib/supabase';
 export default function RegisterPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const initialRef = params.get('ref') || localStorage.getItem('referred_by') || '';
+  const urlRef = (params.get('ref') || '').trim().toUpperCase();
+  const initialRef = urlRef || localStorage.getItem('referred_by') || '';
+  const isFromLink = !!urlRef;
+
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -16,6 +19,14 @@ export default function RegisterPage() {
   const [refCodeInput, setRefCodeInput] = useState(initialRef);
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Save ref so it survives refresh / navigation
+  useEffect(() => {
+    if (urlRef) {
+      localStorage.setItem('referred_by', urlRef);
+      setRefCodeInput(urlRef);
+    }
+  }, [urlRef]);
 
   const handleRegister = async () => {
     if (!name.trim()) { toast.error('Please enter your full name'); return; }
@@ -44,6 +55,8 @@ export default function RegisterPage() {
           referredById = referrer.id;
         } else {
           toast.error('Invalid referral code');
+          setLoading(false);
+          return; // FIX: Do not create user with NULL referred_by
         }
       }
 
@@ -75,6 +88,7 @@ export default function RegisterPage() {
         });
       } catch {}
 
+      localStorage.removeItem('referred_by');
       localStorage.setItem('legend_user', JSON.stringify(newUser));
       localStorage.setItem('legend_current_user_id', newUser.id);
 
@@ -154,10 +168,11 @@ export default function RegisterPage() {
 
           <div>
             <label className="text-xs font-medium text-gray-500 mb-1.5 block">Referral Code (Optional)</label>
-            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: '1.5px solid #333' }}>
-              <Gift size={15} className="text-gray-500 mr-2" />
-              <input type="text" value={refCodeInput} onChange={e => setRefCodeInput(e.target.value.toUpperCase())} placeholder="Enter referral code" className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600 uppercase" />
+            <div className="flex items-center rounded-xl px-3 py-3.5" style={{ background: '#1f1f1f', border: isFromLink ? '1.5px solid #22c55e' : '1.5px solid #333' }}>
+              <Gift size={15} className={isFromLink ? 'text-green-400 mr-2' : 'text-gray-500 mr-2'} />
+              <input type="text" value={refCodeInput} onChange={e => setRefCodeInput(e.target.value.toUpperCase())} placeholder="Enter referral code" readOnly={isFromLink} className="flex-1 outline-none text-sm text-white bg-transparent placeholder-gray-600 uppercase" />
             </div>
+            {isFromLink && <p className="text-green-400 text-xs mt-1.5">✓ Invited via referral link - code filled automatically</p>}
           </div>
 
           <button onClick={handleRegister} disabled={loading} className="w-full gold-gradient py-4 rounded-xl font-bold text-black text-base disabled:opacity-60">
@@ -172,4 +187,4 @@ export default function RegisterPage() {
       </div>
     </div>
   );
-        }
+    }
