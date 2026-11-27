@@ -156,6 +156,7 @@ export default function AdminPage() {
   const [supaWithdraw, setSupaWithdraw] = useState<any[]>([]);
   const [supaProducts, setSupaProducts] = useState<any[]>([]);
   const [allReferrals, setAllReferrals] = useState<any[]>([]);
+  const [openTeam, setOpenTeam] = useState<Record<string, boolean>>({});
 
   const loadAllFromSupabase = useCallback(async () => {
     setLoading(true);
@@ -260,32 +261,35 @@ export default function AdminPage() {
 
   const handleLogout = () => { setCurrentUser(null); navigate('/login'); };
 
-  const handleAddBalance = async (user: AdminUser, isDeduct = false) => {
-    const input = window.prompt(`${isDeduct ? 'Deduct from' : 'Add balance to'} ${user.phone} (UGX):`);
+  const handleAdjust = async (user: AdminUser) => {
+    const action = window.prompt(`Adjust ${user.phone}\nType: ADD or DEDUCT`, 'ADD');
+    if (!action) return;
+    const isDeduct = action.trim().toUpperCase().startsWith('DED');
+    const input = window.prompt(`${isDeduct ? 'Deduct from' : 'Add to'} ${user.phone} (UGX):`);
     if (input === null) return;
     const amount = Number.parseInt(input, 10);
     if (!Number.isSafeInteger(amount) || amount <= 0) { toast.error('Enter a valid positive amount.'); return; }
     const delta = isDeduct ? -amount : amount;
     const newBalance = Math.max(0, Number(user.balance || 0) + delta);
     const { error } = await supabase.from('platform_users').update({ wallet_balance: newBalance }).eq('id', user.id);
-    if (error) { console.error('Could not update user wallet:', error.message); toast.error('Could not update this wallet.'); return; }
+    if (error) { toast.error('Could not update this wallet.'); return; }
     toast.success(`${isDeduct ? 'Deducted' : 'Added'} ${formatUGX(amount)} for ${user.phone}.`);
     setRefresh((value) => value + 1);
   };
 
   const handleBlockUser = async (user: AdminUser) => {
     const shouldBlock = !user.isBlocked;
-    if (!window.confirm(`${shouldBlock ? 'Block' : 'Unblock'} ${user.phone}?`)) return;
+    if (!window.confirm(`${shouldBlock ? 'Ban' : 'Unban'} ${user.phone}?`)) return;
     const { error } = await supabase.from('platform_users').update({ is_blocked: shouldBlock, is_banned: shouldBlock }).eq('id', user.id);
-    if (error) { console.error('Could not update user block status:', error.message); toast.error('Could not update user status.'); return; }
-    toast.success(shouldBlock ? 'User blocked.' : 'User unblocked.');
+    if (error) { toast.error('Could not update user status.'); return; }
+    toast.success(shouldBlock ? 'User banned.' : 'User unbanned.');
     setRefresh((value) => value + 1);
   };
 
   const handleWithdrawalDecision = async (order: (typeof withdrawOrders)[number], decision: 'approve' | 'reject') => {
     const nextStatus = decision === 'approve' ? 'approved' : 'rejected';
     const { error } = await supabase.from('withdraw_orders').update({ status: nextStatus }).eq('id', order.id).eq('status', 'pending');
-    if (error) { console.error('Could not update withdrawal:', error.message); toast.error('Could not update withdrawal.'); return; }
+    if (error) { toast.error('Could not update withdrawal.'); return; }
     toast.success(decision === 'approve' ? 'Withdrawal approved.' : 'Withdrawal rejected.');
     setRefresh((value) => value + 1);
   };
@@ -304,9 +308,11 @@ export default function AdminPage() {
     }
   };
 
-  const filteredUsers = users.filter((user) => user.phone.toLowerCase().includes(searchQ.toLowerCase()));
+  const filteredUsers = users.filter((user) => {
+    const q = searchQ.toLowerCase();
+    return !q || user.phone.toLowerCase().includes(q) || (user.name || '').toLowerCase().includes(q) || (user.full_name || '').toLowerCase().includes(q) || user.referralCode.toLowerCase().includes(q);
+  });
 
-  // Group referrals by inviter for the Referrals tab
   const groupedReferrals: Record<string, any> = {};
   allReferrals.forEach((r: any) => {
     if (!groupedReferrals[r.inviter_phone]) groupedReferrals[r.inviter_phone] = { inviter_name: r.inviter_name, inviter_phone: r.inviter_phone, inviter_code: r.inviter_code, members: [] };
@@ -380,75 +386,93 @@ export default function AdminPage() {
         {tab === 'pesajet' && <PesaJetTab orders={rechargeOrders} loading={loading} loadError={loadError} onRefresh={() => void loadAllFromSupabase()} />}
 
         {tab === 'users' && (
-          <div className="space-y-3">
-            <button type="button" onClick={() => setRefresh((value) => value + 1)} className="w-full py-2.5 rounded-xl font-black text-black text-xs" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>
-              Refresh users ({users.length})
-            </button>
-            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: '#111', border: '1px solid #2a2a2a' }}>
-              <Search size={14} className="text-gray-500" />
-              <input value={searchQ} onChange={(event) => setSearchQ(event.target.value)} placeholder="Search by phone number" className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600" />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-white font-black text-xl">All Users ({users.length})</h2>
+              <button type="button" onClick={() => setRefresh((v) => v + 1)} className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium text-blue-400" style={{ background: '#0f172a', border: '1px solid #1e40af' }}>
+                <Clock size={14} /> Refresh
+              </button>
+            </div>
+            <div className="flex items-center gap-2 rounded-2xl px-4 py-3.5" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+              <Search size={18} className="text-gray-500" />
+              <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Search by name or phone..." className="flex-1 bg-transparent outline-none text-white placeholder-gray-500" />
             </div>
 
-              {filteredUsers.map((user) => {
-              const userRecharges = rechargeOrders.filter((order) => order.user_id === user.id || Boolean(order.phone_number && order.phone_number.replace(/\D/g, '').slice(-9) === user.phone.replace(/\D/g, '').slice(-9)));
-              const userDeposits = userRecharges.filter((order) => ['completed', 'approved', 'paid', 'successful'].includes(String(order.status).toLowerCase()));
-              const depositedAmount = userDeposits.reduce((sum, order) => sum + Number(order.amount || 0), 0);
-              const userWithdrawals = withdrawOrders.filter((order) => order.userId === user.id || (order.phoneNumber && order.phoneNumber.replace(/\D/g, '').slice(-9) === user.phone.replace(/\D/g, '').slice(-9)));
-              const withdrawnAmount = userWithdrawals.filter((order) => ['completed', 'approved'].includes(String(order.status).toLowerCase())).reduce((sum, order) => sum + Number(order.amount || 0), 0);
-              const pendingUserWithdrawals = userWithdrawals.filter((order) => String(order.status).toLowerCase() === 'pending').length;
-              const userProducts = allUserProducts.filter((product) => product.userId === user.id);
-              const activeUserProducts = userProducts.filter((product) => String(product.status).toLowerCase() === 'active').length;
-              const expiredUserProducts = userProducts.filter((product) => String(product.status).toLowerCase() === 'expired').length;
-
-              const level1Users = users.filter((u) => String(u.referredBy || '') === String(user.id) || String(u.referredBy || '') === String(user.referralCode));
-              const level1Ids = new Set(level1Users.map((u) => u.id));
-              const level2Users = users.filter((u) => level1Ids.has(String(u.referredBy || '')));
-              const level2Ids = new Set(level2Users.map((u) => u.id));
-              const level3Users = users.filter((u) => level2Ids.has(String(u.referredBy || '')));
-              const referralTotal = 0;
-              const sevenDayEarnings = 0;
-
+            {filteredUsers.map((user) => {
+              const userWithdrawals = withdrawOrders.filter((o) => o.userId === user.id || (o.phoneNumber && o.phoneNumber.replace(/\D/g, '').slice(-9) === user.phone.replace(/\D/g, '').slice(-9)));
+              const withdrawnAmount = userWithdrawals.filter((o) => ['completed', 'approved'].includes(String(o.status).toLowerCase())).reduce((s, o) => s + Number(o.amount || 0), 0);
+              const userProducts = allUserProducts.filter((p) => p.userId === user.id);
+              const activeUserProducts = userProducts.filter((p) => String(p.status).toLowerCase() === 'active').length;
+              const level1 = users.filter((u) => String(u.referredBy || '') === String(user.id) || String(u.referredBy || '') === String(user.referralCode));
+              const level1Ids = new Set(level1.map((u) => u.id));
+              const level2 = users.filter((u) => level1Ids.has(String(u.referredBy || '')));
+              const level2Ids = new Set(level2.map((u) => u.id));
+              const level3 = users.filter((u) => level2Ids.has(String(u.referredBy || '')));
+              const team = [...level1, ...level2, ...level3];
+              const displayName = user.name || user.full_name || user.phone;
+              const isTeamOpen = !!openTeam[user.id];
               return (
-                <section key={user.id} className="rounded-2xl p-4" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.3)' }}>
-                  <div className="flex justify-between items-start mb-3 gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>
-                        <span className="text-black font-black text-sm">{user.phone.slice(-2) || '—'}</span>
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-white font-black text-base break-all">{user.phone || 'No phone'} <span className="text-[9px] text-green-400">• SUPABASE</span></p>
-                        <p className="text-gray-500 text-[11px]">Lv{user.level} • #{user.referralCode} • Member since {user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-GB') : 'Unknown'}</p>
-                      </div>
+                <section key={user.id} className="rounded-3xl p-5" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-white font-black text-xl leading-tight">{displayName}</p>
+                      <p className="text-gray-400 text-base mt-0.5">{user.phone}</p>
+                      <p className="text-gray-500 text-sm mt-0.5">Joined: {user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-US') : 'Unknown'}</p>
                     </div>
-                    <span className="text-[11px] font-black text-black px-3 py-1 rounded-full shrink-0" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>Lv {user.level}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 mb-3">
-                    <InfoCard label="Current Balance" value={formatUGX(user.balance)} color="#c9a84c" />
-                    <InfoCard label="Cumulative Income" value={formatUGX(user.cumulativeIncome)} color="#fff" />
-                    <InfoCard label="Completed Deposits" value={formatUGX(depositedAmount)} detail={`${userDeposits.length} completed recharges`} color="#60a5fa" />
-                    <InfoCard label="Withdrawn" value={formatUGX(withdrawnAmount)} detail={`${pendingUserWithdrawals} pending`} color="#f87171" />
-                    <InfoCard label="Active Products" value={String(activeUserProducts)} detail={`${expiredUserProducts} expired • ${userProducts.length} total`} color="#4ade80" />
-                    <InfoCard label="Referral Earnings" value={formatUGX(referralTotal)} detail="Across all levels" color="#f472b6" />
-                    <InfoCard label="7-Day Earnings" value={formatUGX(sevenDayEarnings)} color="#2dd4bf" />
-                  </div>
-                  <div className="rounded-xl p-3 mb-3" style={{ background: 'linear-gradient(135deg, #1a1100, #0f0f0f)', border: '1px solid rgba(201,168,76,0.3)' }}>
-                    <p className="text-[#c9a84c] font-black text-xs mb-2">Team Referral</p>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div><p className="text-[#60a5fa] font-black">{level1Users.length}</p><p className="text-gray-400 text-[9px]">Level 1</p><p className="text-[#c9a84c] text-[10px]">{formatUGX(0)}</p></div>
-                      <div><p className="text-[#4ade80] font-black">{level2Users.length}</p><p className="text-gray-400 text-[9px]">Level 2</p><p className="text-[#c9a84c] text-[10px]">{formatUGX(0)}</p></div>
-                      <div><p className="text-[#fb923c] font-black">{level3Users.length}</p><p className="text-gray-400 text-[9px]">Level 3</p><p className="text-[#c9a84c] text-[10px]">{formatUGX(0)}</p></div>
+                    <div className="text-right shrink-0">
+                      <p className="text-green-400 font-black text-lg">{formatUGX(user.balance)}</p>
+                      <p className="text-gray-500 text-sm">Balance</p>
+                      {user.isBlocked && <span className="inline-block mt-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-500/20 text-red-400">BANNED</span>}
                     </div>
-                    <p className="text-gray-500 text-[10px] mt-2">{level1Users.length + level2Users.length + level3Users.length} team members</p>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button type="button" onClick={() => void handleAddBalance(user, false)} className="py-3 rounded-xl text-xs font-black text-black" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>+ Add Balance</button>
-                    <button type="button" onClick={() => void handleAddBalance(user, true)} className="py-3 rounded-xl text-xs font-bold text-gray-300" style={{ background: '#1e1e1e', border: '1px solid #2a2a2a' }}>− Deduct</button>
-                    <button type="button" onClick={() => void handleBlockUser(user)} className="py-3 rounded-xl text-xs font-bold text-red-400" style={{ background: 'rgba(239,68,68,0.15)' }}>{user.isBlocked ? 'Unblock' : 'Block'}</button>
+                  <div className="grid grid-cols-4 gap-2 mt-4">
+                    <div className="rounded-xl p-3 text-center" style={{ background: '#1f2937' }}>
+                      <p className="text-blue-400 font-black text-sm leading-tight">{formatUGX(user.cumulativeIncome)}</p>
+                      <p className="text-gray-400 text-xs mt-1 leading-tight">Total<br />Earned</p>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: '#1f2937' }}>
+                      <p className="text-orange-400 font-black text-sm leading-tight">{formatUGX(withdrawnAmount)}</p>
+                      <p className="text-gray-400 text-xs mt-1 leading-tight">Withdrawn</p>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: '#1f2937' }}>
+                      <p className="text-green-400 font-black text-sm leading-tight">{activeUserProducts}</p>
+                      <p className="text-gray-400 text-xs mt-1 leading-tight">Active<br />Pkgs</p>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: '#1f2937' }}>
+                      <p className="text-purple-400 font-black text-sm leading-tight">{team.length}</p>
+                      <p className="text-gray-400 text-xs mt-1 leading-tight">Referrals</p>
+                    </div>
                   </div>
+                  <p className="text-gray-400 text-sm mt-4">Referral Code: <span className="text-blue-400 font-medium">{user.referralCode}</span></p>
+                  <div className="grid grid-cols-3 gap-2 mt-4">
+                    <button type="button" onClick={() => setOpenTeam({ ...openTeam, [user.id]: !isTeamOpen })} className="py-3 rounded-xl text-sm font-bold text-blue-400 flex items-center justify-center gap-1.5" style={{ background: '#1e3a8a' }}>
+                      <Users size={15} /> {isTeamOpen ? 'Hide Team' : 'View Team'}
+                    </button>
+                    <button type="button" onClick={() => void handleAdjust(user)} className="py-3 rounded-xl text-sm font-bold text-yellow-300 flex items-center justify-center gap-1.5" style={{ background: '#3a2f00', border: '1px solid #665500' }}>
+                      <Wallet size={15} /> Adjust
+                    </button>
+                    <button type="button" onClick={() => void handleBlockUser(user)} className="py-3 rounded-xl text-sm font-bold text-red-400 flex items-center justify-center gap-1.5" style={{ background: '#4a1a1a' }}>
+                      <Shield size={15} /> {user.isBlocked ? 'Unban' : 'Ban'}
+                    </button>
+                  </div>
+                  {isTeamOpen && (
+                    <div className="mt-4 space-y-2" style={{ borderTop: '1px solid #1f2937', paddingTop: 12 }}>
+                      <p className="text-gray-400 text-xs">L1: {level1.length} • L2: {level2.length} • L3: {level3.length}</p>
+                      {team.length === 0 && <p className="text-gray-500 text-sm text-center py-2">No team members yet</p>}
+                      {team.map((m: any) => (
+                        <div key={m.id} className="flex items-center justify-between p-3 rounded-xl" style={{ background: '#1f2937' }}>
+                          <div>
+                            <p className="text-white text-sm font-medium">{m.name || m.full_name || m.phone}</p>
+                            <p className="text-gray-500 text-xs">{m.phone} • {m.referralCode}</p>
+                          </div>
+                          <span className="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-300">{level1.some((x) => x.id === m.id) ? 'L1' : level2.some((x) => x.id === m.id) ? 'L2' : 'L3'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </section>
               );
             })}
-
             {filteredUsers.length === 0 && (
               <div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}>
                 <p className="text-gray-400 text-sm">No matching users found.</p>
@@ -650,14 +674,4 @@ function StatCard({ icon, iconBg, label, value, valueColor }: { icon: React.Reac
       <p className="font-black text-sm mt-1" style={{ color: valueColor }}>{value}</p>
     </div>
   );
-}
-
-function InfoCard({ label, value, detail, color }: { label: string; value: string; detail?: string; color: string }) {
-  return (
-    <div className="rounded-xl p-3" style={{ background: '#0f1419', border: '1px solid #1e293b' }}>
-      <p className="text-gray-500 text-[10px] uppercase">{label}</p>
-      <p className="font-black text-sm mt-1" style={{ color }}>{value}</p>
-      {detail && <p className="text-gray-600 text-[10px] mt-1">{detail}</p>}
-    </div>
-  );
-    }
+       }
