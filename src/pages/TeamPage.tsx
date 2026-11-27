@@ -28,14 +28,16 @@ export default function TeamPage() {
   const navigate = useNavigate();
   const [currentUser] = useState(() => getSupaUser());
   const [copied, setCopied] = useState(false);
-  const [supaUsers, setSupaUsers] = useState([]);
+  const [team, setTeam] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
     const load = async () => {
-      const { data } = await supabase.from('users').select('*');
-      if (data) setSupaUsers(data);
+      // FIX: use get_team_stats, NOT from('users')
+      const { data, error } = await supabase.rpc('get_team_stats', { p_phone: currentUser.phone });
+      if (error) console.error(error);
+      if (data) setTeam(data);
       setLoading(false);
     };
     load();
@@ -43,10 +45,11 @@ export default function TeamPage() {
 
   if (!currentUser) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Loading...</div>;
 
-  const level1 = supaUsers.filter(u => u.referred_by === currentUser.referralCode);
-  const level2 = supaUsers.filter(u => level1.some(l1 => l1.referral_code === u.referred_by));
-  const level3 = supaUsers.filter(u => level2.some(l2 => l2.referral_code === u.referred_by));
-  const totalTeam = level1.length + level2.length + level3.length;
+  // FIX: filter by level from the function, not by referred_by === code
+  const level1 = team.filter((m: any) => m.level === 1);
+  const level2 = team.filter((m: any) => m.level === 2);
+  const level3 = team.filter((m: any) => m.level === 3);
+  const totalTeam = team.length;
   const referralUrl = `${window.location.origin}/register?ref=${currentUser.referralCode || ''}`;
 
   const copy = () => {
@@ -56,7 +59,6 @@ export default function TeamPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Simple commission calc: level1 27% of their balance? Using 0 for now - you can keep your getTeamCommissions logic if you want from localStorage
   const commissions = { level1: 0, level2: 0, level3: 0 };
 
   const levels = [
@@ -66,6 +68,23 @@ export default function TeamPage() {
   ];
 
   if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Loading team...</div>;
+
+  const renderMembers = (title: string, members: any[], label: string) => (
+    members.length > 0 ? (
+      <div className="px-4 space-y-2 mb-4">
+        <h3 className="text-white font-semibold text-sm">{title} ({members.length})</h3>
+        {members.map((member: any) => (
+          <div key={member.member_id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
+            <div>
+              <p className="text-white text-sm font-medium">{member.member_name || member.member_phone}</p>
+              <p className="text-gray-500 text-xs">{member.joined_at ? new Date(member.joined_at).toLocaleDateString() : ''} - {member.member_phone}</p>
+            </div>
+            <span className="text-[#c9a84c] text-xs font-semibold">{label}</span>
+          </div>
+        ))}
+      </div>
+    ) : null
+  );
 
   return (
     <AppLayout>
@@ -101,13 +120,13 @@ export default function TeamPage() {
             {referralUrl}
           </div>
           <button onClick={copy} className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: '#2a2a2a' }}>
-            {copied? <Check size={14} className="text-green-400" /> : <Copy size={14} className="text-gray-400" />}
+            {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} className="text-gray-400" />}
           </button>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <button onClick={copy} className="py-3.5 rounded-xl font-bold text-black text-sm gold-gradient flex items-center justify-center gap-2">
-            {copied? <Check size={16} /> : <Copy size={16} />}
-            {copied? 'Copied!' : 'Copy Link'}
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+            {copied ? 'Copied!' : 'Copy Link'}
           </button>
           <button onClick={() => navigate('/invite')}
             className="py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2"
@@ -120,8 +139,8 @@ export default function TeamPage() {
       <div className="px-4 space-y-2 mb-4">
         {levels.map((lvl, i) => (
           <div key={lvl.level} className="rounded-2xl p-4" style={{
-            background: i === 0? 'linear-gradient(135deg, #1a1400, #2a2000)' : '#151515',
-            border: i === 0? '1px solid rgba(201,168,76,0.4)' : '1px solid #2a2a2a',
+            background: i === 0 ? 'linear-gradient(135deg, #1a1400, #2a2000)' : '#151515',
+            border: i === 0 ? '1px solid rgba(201,168,76,0.4)' : '1px solid #2a2a2a',
           }}>
             <div className="flex items-center justify-between">
               <div>
@@ -146,27 +165,20 @@ export default function TeamPage() {
         ))}
       </div>
 
-      {totalTeam === 0? (
+      {totalTeam === 0 ? (
         <div className="mx-4 rounded-2xl p-10 text-center" style={{ background: '#151515' }}>
           <Users size={32} className="text-gray-600 mx-auto mb-2" />
           <p className="text-gray-600 text-sm">No Members yet</p>
           <p className="text-gray-700 text-xs mt-1">Share your invite link to grow your team</p>
         </div>
       ) : (
-        <div className="px-4 space-y-2">
-          <h3 className="text-white font-semibold text-sm">Level 1 Members ({level1.length})</h3>
-          {level1.map(member => (
-            <div key={member.id} className="rounded-xl p-3 flex items-center justify-between" style={{ background: '#151515', border: '1px solid #2a2a2a' }}>
-              <div>
-                <p className="text-white text-sm font-medium">{member.phone}</p>
-                <p className="text-gray-500 text-xs">{member.created_at? new Date(member.created_at).toLocaleDateString() : ''} - {formatUGX(member.balance||0)}</p>
-              </div>
-              <span className="text-[#c9a84c] text-xs font-semibold">L1</span>
-            </div>
-          ))}
-        </div>
+        <>
+          {renderMembers('Level 1 Members', level1, 'L1')}
+          {renderMembers('Level 2 Members', level2, 'L2')}
+          {renderMembers('Level 3 Members', level3, 'L3')}
+        </>
       )}
       <div className="h-4" />
     </AppLayout>
   );
-      }
+                             }
