@@ -15,6 +15,9 @@ import {
   UserCheck,
   Users,
   Wallet,
+  X,
+  Plus,
+  Minus,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -158,6 +161,12 @@ export default function AdminPage() {
   const [allReferrals, setAllReferrals] = useState<any[]>([]);
   const [openTeam, setOpenTeam] = useState<Record<string, boolean>>({});
 
+  // --- FIXED: Adjust Modal state ---
+  const [adjustUser, setAdjustUser] = useState<AdminUser | null>(null);
+  const [adjustType, setAdjustType] = useState<'ADD' | 'DEDUCT'>('ADD');
+  const [adjustAmount, setAdjustAmount] = useState('');
+  const [adjusting, setAdjusting] = useState(false);
+
   const loadAllFromSupabase = useCallback(async () => {
     setLoading(true);
     setLoadError('');
@@ -261,20 +270,36 @@ export default function AdminPage() {
 
   const handleLogout = () => { setCurrentUser(null); navigate('/login'); };
 
-  const handleAdjust = async (user: AdminUser) => {
-    const action = window.prompt(`Adjust ${user.phone}\nType: ADD or DEDUCT`, 'ADD');
-    if (!action) return;
-    const isDeduct = action.trim().toUpperCase().startsWith('DED');
-    const input = window.prompt(`${isDeduct ? 'Deduct from' : 'Add to'} ${user.phone} (UGX):`);
-    if (input === null) return;
-    const amount = Number.parseInt(input, 10);
-    if (!Number.isSafeInteger(amount) || amount <= 0) { toast.error('Enter a valid positive amount.'); return; }
-    const delta = isDeduct ? -amount : amount;
-    const newBalance = Math.max(0, Number(user.balance || 0) + delta);
-    const { error } = await supabase.from('platform_users').update({ wallet_balance: newBalance }).eq('id', user.id);
-    if (error) { toast.error('Could not update this wallet.'); return; }
-    toast.success(`${isDeduct ? 'Deducted' : 'Added'} ${formatUGX(amount)} for ${user.phone}.`);
-    setRefresh((value) => value + 1);
+  // FIXED: Open modal instead of window.prompt
+  const handleAdjust = (user: AdminUser) => {
+    setAdjustUser(user);
+    setAdjustType('ADD');
+    setAdjustAmount('');
+  };
+
+  // FIXED: Confirm button in modal - runs the SQL
+  const confirmAdjust = async () => {
+    if (!adjustUser) return;
+    const amount = Number.parseInt(adjustAmount.replace(/\D/g, ''), 10);
+    if (!Number.isSafeInteger(amount) || amount <= 0) { toast.error('Enter a valid amount.'); return; }
+    setAdjusting(true);
+    const { error: rpcError } = await supabase.rpc('admin_adjust_balance', {
+      p_user_id: adjustUser.id,
+      p_amount: amount,
+      p_type: adjustType,
+      p_reason: 'Admin adjust',
+    });
+    if (rpcError) {
+      // Fallback if you haven't run the SQL yet
+      const newBalance = adjustType === 'DEDUCT' ? Math.max(0, adjustUser.balance - amount) : adjustUser.balance + amount;
+      const { error } = await supabase.from('platform_users').update({ wallet_balance: newBalance }).eq('id', adjustUser.id);
+      if (error) { toast.error('Could not adjust balance.'); setAdjusting(false); return; }
+    }
+    toast.success(`${adjustType === 'DEDUCT' ? 'Deducted' : 'Added'} ${formatUGX(amount)} for ${adjustUser.phone}.`);
+    setAdjusting(false);
+    setAdjustUser(null);
+    setAdjustAmount('');
+    setRefresh((v) => v + 1);
   };
 
   const handleBlockUser = async (user: AdminUser) => {
@@ -321,6 +346,9 @@ export default function AdminPage() {
   const filteredReferralGroups = Object.values(groupedReferrals).filter((g: any) =>
     !searchQ || g.inviter_phone?.includes(searchQ) || g.inviter_name?.toLowerCase().includes(searchQ.toLowerCase()) || g.inviter_code?.toLowerCase().includes(searchQ.toLowerCase()) || g.members.some((m: any) => m.new_user_phone?.includes(searchQ) || m.new_user_name?.toLowerCase().includes(searchQ.toLowerCase()))
   );
+
+  const quickAmounts = [5000, 10000, 20000, 50000, 100000];
+  const parsedAdjustAmount = Number.parseInt(adjustAmount.replace(/\D/g, ''), 10) || 0;
 
   return (
     <div className="min-h-screen bg-black">
@@ -448,7 +476,7 @@ export default function AdminPage() {
                     <button type="button" onClick={() => setOpenTeam({ ...openTeam, [user.id]: !isTeamOpen })} className="py-3 rounded-xl text-sm font-bold text-blue-400 flex items-center justify-center gap-1.5" style={{ background: '#1e3a8a' }}>
                       <Users size={15} /> {isTeamOpen ? 'Hide Team' : 'View Team'}
                     </button>
-                    <button type="button" onClick={() => void handleAdjust(user)} className="py-3 rounded-xl text-sm font-bold text-yellow-300 flex items-center justify-center gap-1.5" style={{ background: '#3a2f00', border: '1px solid #665500' }}>
+                    <button type="button" onClick={() => handleAdjust(user)} className="py-3 rounded-xl text-sm font-bold text-yellow-300 flex items-center justify-center gap-1.5" style={{ background: '#3a2f00', border: '1px solid #665500' }}>
                       <Wallet size={15} /> Adjust
                     </button>
                     <button type="button" onClick={() => void handleBlockUser(user)} className="py-3 rounded-xl text-sm font-bold text-red-400 flex items-center justify-center gap-1.5" style={{ background: '#4a1a1a' }}>
@@ -662,6 +690,48 @@ export default function AdminPage() {
           </div>
         )}
       </main>
+
+      {/* ===== FIXED: ADJUST BALANCE MODAL ===== */}
+      {adjustUser && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => setAdjustUser(null)}>
+          <div className="w-full max-w-md rounded-3xl p-5" style={{ background: '#111827', border: '1px solid #1f2937' }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-white font-black text-xl">Adjust Balance</h3>
+                <p className="text-gray-400 text-sm mt-0.5">{adjustUser.name || adjustUser.full_name || 'User'} • {adjustUser.phone}</p>
+              </div>
+              <button type="button" onClick={() => setAdjustUser(null)} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: '#1f2937' }}>
+                <X size={16} className="text-gray-400" />
+              </button>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl px-4 py-3 mt-4" style={{ background: '#1f2937' }}>
+              <span className="text-gray-400">Current Balance</span>
+              <span className="text-green-400 font-black text-lg">{formatUGX(adjustUser.balance)}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <button type="button" onClick={() => setAdjustType('ADD')} className={`py-3.5 rounded-2xl font-black flex items-center justify-center gap-2 ${adjustType === 'ADD' ? 'bg-green-500 text-white' : 'text-gray-400'}`} style={adjustType !== 'ADD' ? { background: '#1f2937' } : undefined}>
+                <Plus size={18} /> Add
+              </button>
+              <button type="button" onClick={() => setAdjustType('DEDUCT')} className={`py-3.5 rounded-2xl font-black flex items-center justify-center gap-2 ${adjustType === 'DEDUCT' ? 'bg-red-500 text-white' : 'text-gray-400'}`} style={adjustType !== 'DEDUCT' ? { background: '#1f2937' } : undefined}>
+                <Minus size={18} /> Deduct
+              </button>
+            </div>
+            <p className="text-gray-400 text-sm mt-4 mb-2">Amount (UGX)</p>
+            <input value={adjustAmount} onChange={(e) => setAdjustAmount(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="e.g. 10000" className="w-full rounded-2xl px-4 py-4 text-white text-lg outline-none placeholder-gray-500" style={{ background: '#1f2937', border: '1px solid #374151' }} />
+            <div className="flex gap-2 mt-3">
+              {quickAmounts.map((q) => (
+                <button key={q} type="button" onClick={() => setAdjustAmount(String(q))} className={`flex-1 py-2 rounded-full text-sm font-bold ${parsedAdjustAmount === q ? 'bg-green-500 text-white' : 'text-gray-400'}`} style={parsedAdjustAmount !== q ? { background: '#1f2937' } : undefined}>
+                  {q >= 1000 ? `${q / 1000}K` : q}
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={() => void confirmAdjust()} disabled={!parsedAdjustAmount || adjusting} className="w-full mt-4 py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-2 disabled:opacity-50" style={{ background: adjustType === 'ADD' ? '#22c55e' : '#ef4444', color: '#fff' }}>
+              {adjustType === 'ADD' ? <Plus size={18} /> : <Minus size={18} />}
+              {adjusting ? 'Saving...' : `${adjustType === 'ADD' ? 'Add' : 'Deduct'} ${parsedAdjustAmount ? formatUGX(parsedAdjustAmount) : '— UGX'}`}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -674,4 +744,4 @@ function StatCard({ icon, iconBg, label, value, valueColor }: { icon: React.Reac
       <p className="font-black text-sm mt-1" style={{ color: valueColor }}>{value}</p>
     </div>
   );
-       }
+           }
