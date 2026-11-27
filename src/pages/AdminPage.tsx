@@ -32,7 +32,7 @@ import {
 import type { PasswordResetRequest } from '@/lib/storage';
 import { PRODUCTS } from '@/constants/products';
 
-type AdminTab = 'pesajet' | 'overview' | 'users' | 'recharge' | 'withdraw' | 'products' | 'gifts' | 'resets';
+type AdminTab = 'pesajet' | 'overview' | 'users' | 'referrals' | 'recharge' | 'withdraw' | 'products' | 'gifts' | 'resets';
 
 type AdminUser = {
   id: string;
@@ -68,6 +68,7 @@ const tabs: { key: AdminTab; label: string; icon: typeof Users }[] = [
   { key: 'overview', label: 'Overview', icon: BarChart3 },
   { key: 'pesajet', label: 'PesaJet', icon: DollarSign },
   { key: 'users', label: 'Users', icon: Users },
+  { key: 'referrals', label: 'Referrals', icon: UserCheck },
   { key: 'recharge', label: 'Recharge', icon: CreditCard },
   { key: 'withdraw', label: 'Withdraw', icon: ArrowDownToLine },
   { key: 'products', label: 'Products', icon: Package },
@@ -154,15 +155,17 @@ export default function AdminPage() {
   const [rechargeOrders, setRechargeOrders] = useState<RechargeOrder[]>([]);
   const [supaWithdraw, setSupaWithdraw] = useState<any[]>([]);
   const [supaProducts, setSupaProducts] = useState<any[]>([]);
+  const [allReferrals, setAllReferrals] = useState<any[]>([]);
 
   const loadAllFromSupabase = useCallback(async () => {
     setLoading(true);
     setLoadError('');
-    const [usersResult, rechargeResult, withdrawalsResult, productsResult] = await Promise.all([
+    const [usersResult, rechargeResult, withdrawalsResult, productsResult, referralsResult] = await Promise.all([
       supabase.from('platform_users').select('*').order('created_at', { ascending: false }).limit(500),
       supabase.from('investment_packages').select('*').eq('product_name', 'RECHARGE').order('submitted_at', { ascending: false }).limit(500),
       supabase.from('withdraw_orders').select('*').order('created_at', { ascending: false }).limit(500),
       supabase.from('user_products').select('*').order('purchase_date', { ascending: false }).limit(500),
+      supabase.rpc('get_admin_referrals'),
     ]);
 
     if (usersResult.error) console.error('Admin users load failed:', usersResult.error.message);
@@ -176,6 +179,8 @@ export default function AdminPage() {
     else setSupaWithdraw(withdrawalsResult.data || []);
     if (productsResult.error) console.error('Admin products load failed:', productsResult.error.message);
     else setSupaProducts(productsResult.data || []);
+    if (referralsResult.error) console.error('Admin referrals load failed:', referralsResult.error.message);
+    else setAllReferrals(referralsResult.data || []);
 
     const databaseUsers: AdminUser[] = (usersResult.data || []).map((user: any) => ({
       id: String(user.id),
@@ -193,7 +198,6 @@ export default function AdminPage() {
       isBlocked: Boolean(user.is_blocked || user.is_banned),
     }));
 
-    // FIXED: Supabase ONLY - no LOCAL merge
     setSupaUsers(databaseUsers);
     setLoading(false);
   }, []);
@@ -204,10 +208,8 @@ export default function AdminPage() {
     return () => clearInterval(timer);
   }, [loadAllFromSupabase, refresh]);
 
-  // FIXED: users = Supabase only
   const users = supaUsers;
 
-  // FIXED: Withdraw = Supabase only
   const withdrawOrders = supaWithdraw.map((order: any) => ({
     id: String(order.id),
     userId: String(order.user_id || ''),
@@ -218,7 +220,6 @@ export default function AdminPage() {
     source: 'SUPABASE',
   }));
 
-  // FIXED: Products = Supabase only
   const allUserProducts = supaProducts.map((product: any) => ({
     ...product,
     userId: String(product.user_id || ''),
@@ -250,6 +251,7 @@ export default function AdminPage() {
   const tabBadges: Partial<Record<AdminTab, number>> = {
     pesajet: pendingRechargeCount,
     users: users.length,
+    referrals: allReferrals.length,
     recharge: pendingRechargeCount,
     withdraw: pendingWithdrawals.length,
     products: activeProductsCount,
@@ -303,6 +305,16 @@ export default function AdminPage() {
   };
 
   const filteredUsers = users.filter((user) => user.phone.toLowerCase().includes(searchQ.toLowerCase()));
+
+  // Group referrals by inviter for the Referrals tab
+  const groupedReferrals: Record<string, any> = {};
+  allReferrals.forEach((r: any) => {
+    if (!groupedReferrals[r.inviter_phone]) groupedReferrals[r.inviter_phone] = { inviter_name: r.inviter_name, inviter_phone: r.inviter_phone, inviter_code: r.inviter_code, members: [] };
+    groupedReferrals[r.inviter_phone].members.push(r);
+  });
+  const filteredReferralGroups = Object.values(groupedReferrals).filter((g: any) =>
+    !searchQ || g.inviter_phone?.includes(searchQ) || g.inviter_name?.toLowerCase().includes(searchQ.toLowerCase()) || g.inviter_code?.toLowerCase().includes(searchQ.toLowerCase()) || g.members.some((m: any) => m.new_user_phone?.includes(searchQ) || m.new_user_name?.toLowerCase().includes(searchQ.toLowerCase()))
+  );
 
   return (
     <div className="min-h-screen bg-black">
@@ -388,7 +400,6 @@ export default function AdminPage() {
               const activeUserProducts = userProducts.filter((product) => String(product.status).toLowerCase() === 'active').length;
               const expiredUserProducts = userProducts.filter((product) => String(product.status).toLowerCase() === 'expired').length;
 
-              // FIXED: Team from Supabase users
               const level1Users = users.filter((u) => String(u.referredBy || '') === String(user.id) || String(u.referredBy || '') === String(user.referralCode));
               const level1Ids = new Set(level1Users.map((u) => u.id));
               const level2Users = users.filter((u) => level1Ids.has(String(u.referredBy || '')));
@@ -441,6 +452,55 @@ export default function AdminPage() {
             {filteredUsers.length === 0 && (
               <div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}>
                 <p className="text-gray-400 text-sm">No matching users found.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'referrals' && (
+          <div className="space-y-3">
+            <button type="button" onClick={() => setRefresh((value) => value + 1)} className="w-full py-2.5 rounded-xl font-black text-black text-xs" style={{ background: 'linear-gradient(135deg, #c9a84c, #f0c040)' }}>
+              Refresh referrals ({allReferrals.length} invited)
+            </button>
+            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: '#111', border: '1px solid #2a2a2a' }}>
+              <Search size={14} className="text-gray-500" />
+              <input value={searchQ} onChange={(event) => setSearchQ(event.target.value)} placeholder="Search inviter or invited phone / name" className="flex-1 bg-transparent outline-none text-sm text-white placeholder-gray-600" />
+            </div>
+            <div className="rounded-2xl p-4 text-center" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.3)' }}>
+              <p className="text-white font-black">{allReferrals.length} total invited • {filteredReferralGroups.length} inviters</p>
+              <p className="text-gray-500 text-xs mt-1">Everyone who registered by using everyone's link</p>
+            </div>
+            {filteredReferralGroups.map((g: any) => (
+              <section key={g.inviter_phone} className="rounded-2xl p-4" style={{ background: '#111', border: '1px solid rgba(201,168,76,0.3)' }}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center font-black text-black shrink-0" style={{ background: 'linear-gradient(135deg,#c9a84c,#f0c040)' }}>{g.inviter_name?.[0] || '?'}</div>
+                    <div className="min-w-0">
+                      <p className="text-white font-bold text-sm truncate">{g.inviter_name || 'Unknown'}</p>
+                      <p className="text-gray-500 text-xs">{g.inviter_phone} • {g.inviter_code}</p>
+                    </div>
+                  </div>
+                  <span className="text-[#c9a84c] font-black text-sm shrink-0 ml-2">{g.members.length} invited</span>
+                </div>
+                <div className="space-y-2">
+                  {g.members.map((m: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between p-3 rounded-xl" style={{ background: '#1e1e1e', border: '1px solid #333' }}>
+                      <div>
+                        <p className="text-white text-sm font-medium">{m.new_user_name || m.new_user_phone}</p>
+                        <p className="text-gray-500 text-xs">{m.new_user_phone} • {m.new_user_code}</p>
+                      </div>
+                      <div className="text-right shrink-0 ml-2">
+                        <span className="text-xs px-2 py-1 rounded-full" style={{ background: m.level === 1 ? 'rgba(201,168,76,0.2)' : 'rgba(34,197,94,0.2)', color: m.level === 1 ? '#c9a84c' : '#22c55e' }}>L{m.level}</span>
+                        <p className="text-gray-500 text-xs mt-1">{m.joined_at ? new Date(m.joined_at).toLocaleDateString() : ''}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+            {filteredReferralGroups.length === 0 && (
+              <div className="rounded-2xl p-10 text-center" style={{ background: '#111', border: '1px dashed #333' }}>
+                <p className="text-gray-400 text-sm">No referrals yet</p>
               </div>
             )}
           </div>
@@ -590,7 +650,6 @@ function StatCard({ icon, iconBg, label, value, valueColor }: { icon: React.Reac
       <p className="font-black text-sm mt-1" style={{ color: valueColor }}>{value}</p>
     </div>
   );
-  
 }
 
 function InfoCard({ label, value, detail, color }: { label: string; value: string; detail?: string; color: string }) {
@@ -601,4 +660,4 @@ function InfoCard({ label, value, detail, color }: { label: string; value: strin
       {detail && <p className="text-gray-600 text-[10px] mt-1">{detail}</p>}
     </div>
   );
-  }
+    }
