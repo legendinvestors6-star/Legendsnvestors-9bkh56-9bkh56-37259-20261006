@@ -13,14 +13,22 @@ function getCurrentUserId(): string | null {
   } catch { return null; }
 }
 
+function getCurrentUserPhone(): string {
+  try {
+    const raw = localStorage.getItem('legend_user');
+    if (raw) return JSON.parse(raw).phone || '';
+  } catch {}
+  return '';
+}
+
 const formatUGX = (n: number) => `UGX ${Number(n||0).toLocaleString()}`;
 
 function getStatusConfig(status: string) {
   const s = (status || '').toLowerCase();
-  if (s === 'approved' || s === 'completed' || s === 'success') {
+  if (s === 'approved' || s === 'completed' || s === 'success' || s === 'successful' || s === 'paid') {
     return { icon: CheckCircle, label: 'Approved', color: '#22c55e', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.25)' };
   }
-  if (s === 'rejected' || s === 'failed') {
+  if (s === 'rejected' || s === 'failed' || s === 'cancelled' || s === 'canceled') {
     return { icon: XCircle, label: 'Rejected', color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.25)' };
   }
   return { icon: Clock, label: 'Pending', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.25)' };
@@ -100,32 +108,78 @@ export default function RechargeStatusPage() {
       const userId = getCurrentUserId();
       if (!userId) { navigate('/login'); return; }
       setCurrentUser({ id: userId });
+      const userPhone = getCurrentUserPhone();
 
       let allOrders: any[] = [];
-      
+
+      // === FIX 1: Query investment_packages, NOT recharge_orders ===
+      // Backend + RechargePage save to investment_packages with product_name='RECHARGE'
+      // recharge_orders table is empty / doesn't exist, so old code always showed 0
       try {
-        const { data, error } = await supabase.from('recharge_orders').select('*').eq('user_id', userId).order('created_at', { ascending: false });
-        if (error) console.log('Supabase error:', error.message);
+        const { data, error } = await supabase
+          .from('investment_packages')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (error) console.log('Supabase error (by user_id):', error.message);
         if (data) allOrders = data;
       } catch (e) { console.log('supabase error', e); }
+
+      // === FIX 2: Fallback by phone_number ===
+      // If backend corrected the user_id by phone, the order has a different user_id
+      // Find it by phone in all formats: 07..., +256..., 256...
+      if (userPhone) {
+        const digits = String(userPhone).replace(/\D/g, '');
+        const variants = new Set<string>([userPhone]);
+        if (digits.startsWith('0') && digits.length === 10) {
+          variants.add(`+256${digits.slice(1)}`);
+          variants.add(`256${digits.slice(1)}`);
+          variants.add(digits);
+        } else if (digits.startsWith('256') && digits.length === 12) {
+          variants.add(`+${digits}`);
+          variants.add(`0${digits.slice(3)}`);
+          variants.add(digits);
+        }
+        for (const p of variants) {
+          try {
+            const { data } = await supabase
+              .from('investment_packages')
+              .select('*')
+              .eq('phone_number', p)
+              .order('created_at', { ascending: false });
+            if (data?.length) {
+              const ids = new Set(allOrders.map((o: any) => o.id));
+              data.forEach((o: any) => { if (!ids.has(o.id)) allOrders.push(o); });
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      // === FIX 3: Keep only recharge orders, accept BOTH names ===
+      // Backend uses 'RECHARGE', some old code uses 'Wallet Recharge'
+      const recharges = allOrders.filter((o: any) => {
+        const name = String(o.product_name || '').toLowerCase();
+        return name === 'recharge' || name.includes('recharge') || name === 'wallet recharge';
+      });
 
       try {
         const local = JSON.parse(localStorage.getItem('legend_recharge_orders') || '[]');
         const localFiltered = local.filter((o: any) => o.userId === userId || o.user_id === userId);
-        const ids = new Set(allOrders.map((o: any) => o.id));
-        localFiltered.forEach((o: any) => { 
-          if (!ids.has(o.id)) allOrders.push({ 
-            ...o, 
-            created_at: o.createdAt || o.created_at, 
-            amount: o.amount, 
-            status: o.status, 
-            payment_method: o.paymentMethod || o.payment_method, 
-            phone_number: o.phoneNumber || o.phone_number 
-          }); 
+        const ids = new Set(recharges.map((o: any) => o.id));
+        localFiltered.forEach((o: any) => {
+          if (!ids.has(o.id)) recharges.push({
+            ...o,
+            created_at: o.createdAt || o.created_at,
+            amount: o.amount,
+            status: o.status,
+            payment_method: o.paymentMethod || o.payment_method,
+            phone_number: o.phoneNumber || o.phone_number
+          });
         });
       } catch {}
 
-      setOrders(allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+      setOrders(recharges.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
     };
     load();
   }, [navigate, lastRefresh]);
@@ -134,23 +188,24 @@ export default function RechargeStatusPage() {
 
   if (!currentUser) return null;
 
-  const isApproved = (s: string) => ['approved','completed','success'].includes((s||'').toLowerCase());
+  const isApproved = (s: string) => ['approved','completed','success','successful','paid'].includes((s||'').toLowerCase());
   const isPending = (s: string) => (s||'').toLowerCase() === 'pending';
-  const isRejected = (s: string) => ['rejected','failed'].includes((s||'').toLowerCase());
+  const isRejected = (s: string) => ['rejected','failed','cancelled','canceled'].includes((s||'').toLowerCase());
 
   const pending = orders.filter((o) => isPending(o.status)).length;
   const approved = orders.filter((o) => isApproved(o.status)).length;
   const rejected = orders.filter((o) => isRejected(o.status)).length;
   const totalRecharged = orders.filter((o) => isApproved(o.status)).reduce((s, o) => s + Number(o.amount || 0), 0);
-  
-  const filtered = filter === 'all' ? orders : 
+
+  const filtered = filter === 'all' ? orders :
                    filter === 'approved' ? orders.filter((o) => isApproved(o.status)) :
-                   orders.filter((o) => o.status?.toLowerCase() === filter);
+                   filter === 'pending' ? orders.filter((o) => isPending(o.status)) :
+                   orders.filter((o) => isRejected(o.status));
 
   const tabs = [
-    { key: 'all' as const, label: 'All', count: orders.length }, 
-    { key: 'pending' as const, label: 'Pending', count: pending }, 
-    { key: 'approved' as const, label: 'Approved', count: approved }, 
+    { key: 'all' as const, label: 'All', count: orders.length },
+    { key: 'pending' as const, label: 'Pending', count: pending },
+    { key: 'approved' as const, label: 'Approved', count: approved },
     { key: 'rejected' as const, label: 'Rejected', count: rejected }
   ];
 
@@ -195,4 +250,4 @@ export default function RechargeStatusPage() {
       </div>
     </div>
   );
-      }
+                                                                                 }
