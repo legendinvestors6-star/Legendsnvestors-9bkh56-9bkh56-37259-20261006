@@ -56,25 +56,68 @@ export default async function handler(req, res) {
     return res.status(500).json({ success: false, error: 'Supabase server credentials are not configured.' });
   }
 
-  // FIX: NO Supabase Auth - your app uses custom login (users table, id = text, phone column)
-  // We verify user exists in YOUR users table using service_role, not auth.getUser()
   const db = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const { data: existingUser, error: userError } = await db
+  // === FIXED USER LOOKUP ===
+  // Old code only tried exact ID -> failed for stale legend_user / duplicate accounts
+  // New code: try ID first, then phone in ALL formats (+256..., 07..., 256...)
+  let existingUser = null;
+
+  const { data: byId, error: byIdError } = await db
     .from('users')
     .select('id, phone')
     .eq('id', String(requestedUserId))
     .maybeSingle();
 
-  if (userError) {
-    console.error('User lookup failed:', userError.message);
+  if (byIdError) {
+    console.error('User lookup by ID failed:', byIdError.message);
     return res.status(500).json({ success: false, error: 'Could not verify user. Try again.' });
   }
+
+  existingUser = byId;
+
+  // Fallback by phone if ID didn't match
   if (!existingUser) {
+    const rawPhone = String(phone || phone_number || '');
+    const digits = rawPhone.replace(/\D/g, '');
+    const candidates = new Set();
+
+    if (digits.startsWith('0') && digits.length === 10) {
+      candidates.add(rawPhone);
+      candidates.add(digits);
+      candidates.add(`+256${digits.slice(1)}`);
+      candidates.add(`256${digits.slice(1)}`);
+      candidates.add(`0${digits.slice(1)}`);
+    } else if (digits.startsWith('256') && digits.length === 12) {
+      candidates.add(`+${digits}`);
+      candidates.add(digits);
+      candidates.add(`0${digits.slice(3)}`);
+    } else if (digits) {
+      candidates.add(rawPhone);
+      candidates.add(digits);
+    }
+
+    for (const p of candidates) {
+      const { data: byPhone } = await db
+        .from('users')
+        .select('id, phone')
+        .eq('phone', p)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (byPhone) { existingUser = byPhone; break; }
+    }
+  }
+
+  if (!existingUser) {
+    console.error('User not found:', { requestedUserId, phone: phone || phone_number });
     return res.status(404).json({ success: false, error: 'User not found. Please log in again.' });
   }
+
+  // Use the REAL ID from DB, not the stale frontend ID
+  const finalUserId = String(existingUser.id);
 
   let phoneNumber;
   let providerValue;
@@ -85,12 +128,28 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Invalid payment details.' });
   }
 
-  // Use the same table and reference used by the webhook and admin page.
+  // Check if this reference already exists - don't create duplicate order
+  const { data: existingOrder } = await db
+    .from('investment_packages')
+    .select('id, status')
+    .eq('id', reference)
+    .maybeSingle();
+
+  if (existingOrder) {
+    return res.status(200).json({
+      success: true,
+      status: 'accepted',
+      reference,
+      order_id: existingOrder.id,
+      message: 'Payment request already exists.',
+    });
+  }
+
   const { error: insertError } = await db
     .from('investment_packages')
     .insert({
       id: reference,
-      user_id: String(requestedUserId),
+      user_id: finalUserId,
       amount: paymentAmount,
       product_name: 'RECHARGE',
       status: 'pending',
@@ -149,6 +208,7 @@ export default async function handler(req, res) {
       success: true,
       status: 'accepted',
       reference,
+      order_id: reference,
       transaction_id: transactionId,
       message: 'PesaJet accepted the payment request.',
     });
@@ -156,4 +216,4 @@ export default async function handler(req, res) {
     console.error('PesaJet request error:', error instanceof Error ? error.message : 'Unknown error');
     return res.status(502).json({ success: false, reference, error: 'The payment request result is uncertain. Check recharge status before retrying.' });
   }
-                        }
+}
