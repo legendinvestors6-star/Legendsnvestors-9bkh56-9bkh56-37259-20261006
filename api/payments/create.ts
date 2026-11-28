@@ -1,24 +1,50 @@
 import { createClient } from '@supabase/supabase-js';
 
-function normalizeUgandaPhone(value) {
+function normalizeUgandaPhone(value: any) {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.startsWith('0') && digits.length === 10) return `256${digits.slice(1)}`;
   if (digits.startsWith('256') && digits.length === 12) return digits;
   throw new Error('Enter a valid Uganda phone number.');
 }
 
-function getNetwork(provider) {
+function getProvider(provider: any, phone: any) {
+  // Auto-detect from number - 075/070 = airtel, 077/078/076 = mtn
+  const digits = String(phone || '').replace(/\D/g, '');
+  const prefix = digits.startsWith('256') ? digits.slice(3, 5) : digits.slice(0, 2);
+  if (['75', '70'].includes(prefix)) return 'airtel';
+  if (['77', '78', '76'].includes(prefix)) return 'mtn';
   const n = String(provider || '').trim().toLowerCase();
-  if (n === 'mtn') return 'MTN';
-  if (n === 'airtel') return 'AIRTEL';
+  if (n === 'mtn' || n === 'airtel') return n;
   throw new Error('Choose MTN or Airtel.');
 }
 
-async function readJson(response) {
+async function readJson(response: any) {
   try { return await response.json(); } catch { return null; }
 }
 
-export default async function handler(req, res) {
+function getTransactionId(data: any) {
+  if (!data || typeof data !== 'object') return null;
+  const candidates = [
+    data.id,
+    data.transaction_id,
+    data.transactionId,
+    data.payment_id,
+    data.paymentId,
+    data.tx_ref,
+    data?.data?.id,
+    data?.data?.transaction_id,
+    data?.data?.transactionId,
+    data?.data?.payment_id,
+    data?.data?.data?.id,
+    data?.data?.transaction?.id,
+    data?.data?.reference,
+    data?.reference,
+  ];
+  for (const c of candidates) if (c) return String(c);
+  return null;
+}
+
+export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -37,32 +63,30 @@ export default async function handler(req, res) {
   const apiKey = process.env.PESAJET_API_KEY;
   const supabaseUrl = process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const appBaseUrl = process.env.APP_BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
 
   if (!apiKey) return res.status(500).json({ success: false, error: 'PesaJet API key is not configured on the server.' });
   if (!supabaseUrl || !serviceKey) return res.status(500).json({ success: false, error: 'Supabase server credentials are not configured.' });
-  if (!appBaseUrl) return res.status(500).json({ success: false, error: 'Set APP_BASE_URL to your deployed site URL.' });
 
-  let normalizedPhone, network;
+  let normalizedPhone: string;
+  let providerValue: string;
   try {
     normalizedPhone = normalizeUgandaPhone(phone);
-    network = getNetwork(provider);
-  } catch (error) {
+    providerValue = getProvider(provider, phone);
+  } catch (error: any) {
     return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Invalid payment details.' });
   }
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
-  const callbackUrl = `${appBaseUrl.replace(/\/$/, '')}/api/pesajet-callback`;
   const paymentsUrl = 'https://payments.pesajet.com/api/v1/payments';
 
   try {
-    // FIX 1: Write to BOTH tables so frontend polling works
+    // Write to ALL 3 tables so every frontend page finds it
     const { error: insertError } = await supabase.from('pesajet_transactions').insert({
       order_id: String(reference),
       user_id: String(user_id),
       amount: paymentAmount,
       phone: normalizedPhone,
-      network,
+      network: providerValue.toUpperCase(),
       status: 'pending',
       created_at: new Date().toISOString(),
     });
@@ -71,52 +95,69 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: 'Could not create the payment record: ' + insertError.message });
     }
 
-    // ALSO write to recharge_orders - ignore duplicate error
     await supabase.from('recharge_orders').insert({
       id: String(reference),
       user_id: String(user_id),
       phone: normalizedPhone,
-      phone_number: normalizedPhone,
+      phone_number: `+${normalizedPhone}`,
       amount: paymentAmount,
-      payment_method: network.toLowerCase(),
+      payment_method: providerValue,
       status: 'pending',
       created_at: new Date().toISOString(),
     });
 
+    // THIS is the table your Status page reads from
+    await supabase.from('investment_packages').insert({
+      id: String(reference),
+      user_id: String(user_id),
+      amount: paymentAmount,
+      product_name: 'RECHARGE',
+      status: 'pending',
+      payment_method: providerValue,
+      phone_number: `+${normalizedPhone}`,
+      submitted_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+
+    console.log('Sending to PesaJet:', { amount: paymentAmount, provider: providerValue, phone: normalizedPhone, reference });
+
+    // FIXED: Correct PesaJet format - X-API-Key + ONLY 5 fields
     const providerResponse = await fetch(paymentsUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({
         amount: paymentAmount,
-        phone: normalizedPhone,
-        network,
+        currency: 'UGX',
+        provider: providerValue,
+        phoneNumber: normalizedPhone,
         reference: String(reference),
-        callback_url: callbackUrl,
-        description: `Legend Recharge UGX ${paymentAmount}`,
       }),
     });
 
     const providerData = await readJson(providerResponse);
+    console.log('PesaJet raw response:', providerResponse.status, JSON.stringify(providerData));
 
     if (!providerResponse.ok) {
       await supabase.from('pesajet_transactions').update({ status: 'failed' }).eq('order_id', String(reference));
       await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
+      await supabase.from('investment_packages').update({ status: 'failed' }).eq('id', String(reference));
       console.error('PesaJet rejected:', { status: providerResponse.status, response: providerData });
       return res.status(502).json({ success: false, error: providerData?.message || providerData?.error || `PesaJet rejected the request (${providerResponse.status}).` });
     }
 
-    // FIX 2: Don't fail if PesaJet returns different ID field - accept ANY id
-    const transactionId =
-      providerData?.id ||
-      providerData?.transaction_id ||
-      providerData?.data?.id ||
-      providerData?.data?.transaction_id ||
-      providerData?.data?.reference ||
-      providerData?.reference ||
-      String(reference); // fallback to our reference - DON'T 502
+    const transactionId = getTransactionId(providerData);
+    if (!transactionId) {
+      console.error('PesaJet response had no transaction ID. Full response:', JSON.stringify(providerData));
+      await supabase.from('pesajet_transactions').update({ status: 'failed' }).eq('order_id', String(reference));
+      await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
+      await supabase.from('investment_packages').update({ status: 'failed' }).eq('id', String(reference));
+      return res.status(502).json({ success: false, reference, error: 'The provider response could not be confirmed. Check order status before retrying.' });
+    }
 
-    const { error: updateError } = await supabase.from('pesajet_transactions').update({ pesajet_id: String(transactionId) }).eq('order_id', String(reference));
-    if (updateError) console.error('Could not save PesaJet ID:', updateError.message);
+    await supabase.from('pesajet_transactions').update({ pesajet_id: String(transactionId) }).eq('order_id', String(reference));
+    await supabase.from('investment_packages').update({ pesajet_id: String(transactionId) }).eq('id', String(reference));
+
+    console.log('PesaJet accepted:', { reference, transactionId, provider: providerValue });
 
     return res.status(200).json({
       success: true,
@@ -125,11 +166,11 @@ export default async function handler(req, res) {
       transaction_id: String(transactionId),
       message: 'PesaJet accepted the payment request.',
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('PesaJet handler error:', error instanceof Error ? error.message : 'Unknown');
     await supabase.from('pesajet_transactions').update({ status: 'failed' }).eq('order_id', String(reference));
     await supabase.from('recharge_orders').update({ status: 'failed' }).eq('id', String(reference));
+    await supabase.from('investment_packages').update({ status: 'failed' }).eq('id', String(reference));
     return res.status(502).json({ success: false, error: 'Could not contact the payment provider.' });
   }
-    }
- 
+                                            }
