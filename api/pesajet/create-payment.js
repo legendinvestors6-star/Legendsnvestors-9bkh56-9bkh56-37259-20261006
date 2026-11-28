@@ -11,23 +11,17 @@ function normalizeUgandaPhone(value) {
   throw new Error('Enter a valid Uganda phone number.');
 }
 
-// PesaJet wants 256... without + for some endpoints, keep both formats
 function phoneForPesaJet(phoneWithPlus) {
-  return String(phoneWithPlus || '').replace(/\D/g, ''); // 256756406186
+  return String(phoneWithPlus || '').replace(/\D/g, '');
 }
 
 function getProvider(value, phoneNumber) {
-  // Auto-detect from number - don't trust user's pick
-  // 075, 070 = Airtel | 077, 078, 076 = MTN
   const digits = String(phoneNumber || '').replace(/\D/g, '');
   const prefix = digits.startsWith('256') ? digits.slice(3, 5) : digits.slice(0, 2);
   if (['75', '70'].includes(prefix)) return 'airtel';
   if (['77', '78', '76'].includes(prefix)) return 'mtn';
-
   const provider = String(value || '').trim().toLowerCase();
-  if (provider === 'mtn' || provider === 'airtel') {
-    return provider;
-  }
+  if (provider === 'mtn' || provider === 'airtel') return provider;
   throw new Error('Choose MTN or Airtel.');
 }
 
@@ -100,7 +94,6 @@ export default async function handler(req, res) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // === FIXED USER LOOKUP ===
   let existingUser = null;
 
   const { data: byId, error: byIdError } = await db
@@ -120,7 +113,6 @@ export default async function handler(req, res) {
     const rawPhone = String(phone || phone_number || '');
     const digits = rawPhone.replace(/\D/g, '');
     const candidates = new Set();
-
     if (digits.startsWith('0') && digits.length === 10) {
       candidates.add(rawPhone);
       candidates.add(digits);
@@ -135,7 +127,6 @@ export default async function handler(req, res) {
       candidates.add(rawPhone);
       candidates.add(digits);
     }
-
     for (const p of candidates) {
       const { data: byPhone } = await db
         .from('users')
@@ -164,7 +155,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Invalid payment details.' });
   }
 
-  // Check if this reference already exists - don't create duplicate order
   const { data: existingOrder } = await db
     .from('investment_packages')
     .select('id, status')
@@ -201,7 +191,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const pesajetPhone = phoneForPesaJet(phoneNumber); // 256756406186 - no +
+    const pesajetPhone = phoneForPesaJet(phoneNumber);
     console.log('Sending to PesaJet:', { amount: paymentAmount, provider: providerValue, phone: pesajetPhone, reference });
 
     const providerResponse = await fetch(
@@ -209,13 +199,12 @@ export default async function handler(req, res) {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+        // FIXED: ONLY these 5 fields - PesaJet rejects extra fields
         body: JSON.stringify({
           amount: paymentAmount,
           currency: 'UGX',
           provider: providerValue,
           phoneNumber: pesajetPhone,
-          phone_number: pesajetPhone,
-          phone: pesajetPhone,
           reference,
         }),
       }
@@ -233,7 +222,6 @@ export default async function handler(req, res) {
     const transactionId = getTransactionId(providerData);
     if (!transactionId) {
       console.error('PesaJet response had no transaction ID. Full response:', JSON.stringify(providerData));
-      // FIX: Don't leave it pending with NULL - mark failed so user can retry cleanly
       await db.from('investment_packages').update({ status: 'failed' }).eq('id', reference).eq('status', 'pending');
       return res.status(502).json({ success: false, reference, error: 'The provider response could not be confirmed. Check order status before retrying.' });
     }
@@ -260,7 +248,6 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('PesaJet request error:', error instanceof Error ? error.message : 'Unknown error');
-    // FIX: On network error, mark failed instead of leaving pending forever
     await db.from('investment_packages').update({ status: 'failed' }).eq('id', reference).eq('status', 'pending');
     return res.status(502).json({ success: false, reference, error: 'The payment request result is uncertain. Check recharge status before retrying.' });
   }
