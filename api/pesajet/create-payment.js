@@ -11,7 +11,19 @@ function normalizeUgandaPhone(value) {
   throw new Error('Enter a valid Uganda phone number.');
 }
 
-function getProvider(value) {
+// PesaJet wants 256... without + for some endpoints, keep both formats
+function phoneForPesaJet(phoneWithPlus) {
+  return String(phoneWithPlus || '').replace(/\D/g, ''); // 256756406186
+}
+
+function getProvider(value, phoneNumber) {
+  // Auto-detect from number - don't trust user's pick
+  // 075, 070 = Airtel | 077, 078, 076 = MTN
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  const prefix = digits.startsWith('256') ? digits.slice(3, 5) : digits.slice(0, 2);
+  if (['75', '70'].includes(prefix)) return 'airtel';
+  if (['77', '78', '76'].includes(prefix)) return 'mtn';
+
   const provider = String(value || '').trim().toLowerCase();
   if (provider === 'mtn' || provider === 'airtel') {
     return provider;
@@ -24,8 +36,36 @@ async function readJson(response) {
 }
 
 function getTransactionId(data) {
-  const id = data?.id || data?.transaction_id || data?.data?.id || data?.data?.transaction_id;
-  return id ? String(id) : null;
+  if (!data || typeof data !== 'object') return null;
+  const candidates = [
+    data.id,
+    data.transaction_id,
+    data.transactionId,
+    data.payment_id,
+    data.paymentId,
+    data.tx_ref,
+    data.txRef,
+    data?.data?.id,
+    data?.data?.transaction_id,
+    data?.data?.transactionId,
+    data?.data?.payment_id,
+    data?.data?.paymentId,
+    data?.data?.tx_ref,
+    data?.data?.data?.id,
+    data?.data?.data?.transaction_id,
+    data?.data?.data?.transactionId,
+    data?.data?.transaction?.id,
+    data?.data?.transaction?.transaction_id,
+    data?.data?.transaction?.transactionId,
+    data?.data?.payment?.id,
+    data?.data?.payment?.transaction_id,
+    data?.data?.reference,
+    data?.reference,
+  ];
+  for (const c of candidates) {
+    if (c) return String(c);
+  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -61,8 +101,6 @@ export default async function handler(req, res) {
   });
 
   // === FIXED USER LOOKUP ===
-  // Old code only tried exact ID -> failed for stale legend_user / duplicate accounts
-  // New code: try ID first, then phone in ALL formats (+256..., 07..., 256...)
   let existingUser = null;
 
   const { data: byId, error: byIdError } = await db
@@ -78,7 +116,6 @@ export default async function handler(req, res) {
 
   existingUser = byId;
 
-  // Fallback by phone if ID didn't match
   if (!existingUser) {
     const rawPhone = String(phone || phone_number || '');
     const digits = rawPhone.replace(/\D/g, '');
@@ -116,14 +153,13 @@ export default async function handler(req, res) {
     return res.status(404).json({ success: false, error: 'User not found. Please log in again.' });
   }
 
-  // Use the REAL ID from DB, not the stale frontend ID
   const finalUserId = String(existingUser.id);
 
   let phoneNumber;
   let providerValue;
   try {
     phoneNumber = normalizeUgandaPhone(phone || phone_number);
-    providerValue = getProvider(provider);
+    providerValue = getProvider(provider, phone || phone_number);
   } catch (error) {
     return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Invalid payment details.' });
   }
@@ -165,6 +201,9 @@ export default async function handler(req, res) {
   }
 
   try {
+    const pesajetPhone = phoneForPesaJet(phoneNumber); // 256756406186 - no +
+    console.log('Sending to PesaJet:', { amount: paymentAmount, provider: providerValue, phone: pesajetPhone, reference });
+
     const providerResponse = await fetch(
       'https://payments.pesajet.com/api/v1/payments',
       {
@@ -174,23 +213,28 @@ export default async function handler(req, res) {
           amount: paymentAmount,
           currency: 'UGX',
           provider: providerValue,
-          phoneNumber,
+          phoneNumber: pesajetPhone,
+          phone_number: pesajetPhone,
+          phone: pesajetPhone,
           reference,
         }),
       }
     );
 
     const providerData = await readJson(providerResponse);
+    console.log('PesaJet raw response:', providerResponse.status, JSON.stringify(providerData));
 
     if (!providerResponse.ok) {
       await db.from('investment_packages').update({ status: 'failed' }).eq('id', reference).eq('status', 'pending');
-      console.error('PesaJet rejected payment request:', { status: providerResponse.status, message: providerData?.message || providerData?.error || 'No details' });
+      console.error('PesaJet rejected payment request:', { status: providerResponse.status, message: providerData?.message || providerData?.error || 'No details', full: providerData });
       return res.status(502).json({ success: false, error: providerData?.message || providerData?.error || `PesaJet rejected the request (${providerResponse.status}).` });
     }
 
     const transactionId = getTransactionId(providerData);
     if (!transactionId) {
-      console.error('PesaJet response had no transaction ID.');
+      console.error('PesaJet response had no transaction ID. Full response:', JSON.stringify(providerData));
+      // FIX: Don't leave it pending with NULL - mark failed so user can retry cleanly
+      await db.from('investment_packages').update({ status: 'failed' }).eq('id', reference).eq('status', 'pending');
       return res.status(502).json({ success: false, reference, error: 'The provider response could not be confirmed. Check order status before retrying.' });
     }
 
@@ -204,6 +248,8 @@ export default async function handler(req, res) {
       console.error('Could not save provider transaction ID:', saveTransactionError.message);
     }
 
+    console.log('PesaJet accepted:', { reference, transactionId, provider: providerValue });
+
     return res.status(200).json({
       success: true,
       status: 'accepted',
@@ -214,6 +260,8 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('PesaJet request error:', error instanceof Error ? error.message : 'Unknown error');
+    // FIX: On network error, mark failed instead of leaving pending forever
+    await db.from('investment_packages').update({ status: 'failed' }).eq('id', reference).eq('status', 'pending');
     return res.status(502).json({ success: false, reference, error: 'The payment request result is uncertain. Check recharge status before retrying.' });
   }
-}
+      }
